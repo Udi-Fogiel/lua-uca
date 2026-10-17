@@ -47,11 +47,18 @@ local options = {
   -- "upper", "lower", "off" (or nil)
   case_first = {upper = true, lower = true, off = true},
   case_level = "boolean",
+  -- the order of Han characters: "implicit" (or nil, the order of the
+  -- Unified_Ideograph ranges) or "radical-stroke"; only when the collator is
+  -- created
+  han_order = {implicit = true, ["radical-stroke"] = true},
 }
 
 local function set_option(self, name, value)
   local allowed = options[name]
   if not allowed then error("lua-uca: unknown option " .. tostring(name), 3) end
+  if name == "han_order" and rawget(self, "created") then
+    error("lua-uca: the option han_order can only be given to collator.new", 3)
+  end
   if value ~= nil then
     if allowed == "boolean" then
       if type(value) ~= "boolean" then error("lua-uca: option " .. name .. " must be a boolean", 3) end
@@ -119,6 +126,10 @@ function collator.new(codes, settings)
   self.stringcache = {}
   self.tailoring_multiplier = {1, 1, 1, 1}
   for name, value in pairs(settings or {}) do set_option(self, name, value) end
+  if self.settings.han_order == "radical-stroke" then
+    self:use_radical_stroke()
+  end
+  rawset(self, "created", true)
   return self
 end
 
@@ -167,11 +178,43 @@ end
 -- in the root collation (lua-uca-root.lua, from CLDR's FractionalUCA.txt)
 local han_ranges = implicit.han_ranges(root_info.han_ranges, root_info.unassigned_lead)
 
+-- the radical-stroke order of Han (FractionalUCA.txt's [radical] lines),
+-- loaded when it is used
+local radical_ranges
+local function get_radical_ranges()
+  if not radical_ranges then
+    local pairs_list
+    if kpse then
+      pairs_list = require "lua-uca.lua-uca-han-radical"
+    else
+      pairs_list = require "lua-uca.han-radical"
+    end
+    local ranges = {}
+    for i = 1, #pairs_list, 2 do ranges[#ranges + 1] = {pairs_list[i], pairs_list[i + 1]} end
+    radical_ranges = implicit.han_ranges(ranges, root_info.unassigned_lead)
+  end
+  return radical_ranges
+end
+
+-- Han characters in radical-stroke order: the implicit weights, and the
+-- collation elements that refer to a Han character (the `han` field)
+function collator:use_radical_stroke()
+  local ranges = get_radical_ranges()
+  rawset(self, "han_ranges", ranges)
+  local function update(entry)
+    for _, element in ipairs(entry.value or {}) do
+      if element.han then element[1] = implicit.han_primary(element.han, ranges) end
+    end
+    for _, child in pairs(entry.children or {}) do update(child) end
+  end
+  for _, entry in pairs(self.codes) do update(entry) end
+end
+
 function collator:get_implicit_weight(codepoints, pos)
-  -- Han by the order of the Unified_Ideograph ranges, the others by their
-  -- code point
+  -- Han by the order of the Unified_Ideograph ranges (or radical-stroke),
+  -- the others by their code point
   local codepoint = codepoints[pos]
-  local primary = implicit.han_primary(codepoint, han_ranges)
+  local primary = implicit.han_primary(codepoint, rawget(self, "han_ranges") or han_ranges)
     or implicit.unassigned_primary(codepoint, root_info.unassigned_lead)
   -- the implicit weights are moved with their script by reordering
   if self.reorder_moves then

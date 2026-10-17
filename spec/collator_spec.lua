@@ -161,6 +161,22 @@ describe("collator test suite",function()
     c:uppercase_first()
     assert.same("upper", c.settings.case_first)
   end)
+  it("han_order should work", function()
+    local sorted = function(order)
+      local c = collator.new(ducet, {han_order = order})
+      -- U+2F00 (Kangxi radical one) refers to U+4E00
+      local t = {"\u{4E01}", "\u{2A6D9}", "\u{4E00}", "\u{2F00}"}
+      table.sort(t, function(x, y) return c:compare_strings(x, y) end)
+      return t
+    end
+    -- the implicit order: core Han before Extension B
+    assert.same({"\u{4E00}", "\u{2F00}", "\u{4E01}", "\u{2A6D9}"}, sorted())
+    -- radical-stroke: U+2A6D9 has radical 1 and no residual strokes
+    assert.same({"\u{4E00}", "\u{2F00}", "\u{2A6D9}", "\u{4E01}"}, sorted "radical-stroke")
+    -- only when the collator is created
+    local c = collator.new(ducet)
+    assert.falsy(pcall(function() c:set {han_order = "radical-stroke"} end))
+  end)
   it("should make sort keys", function()
     local codepoints = {0x0FB2, 0x0F80, string.byte("a")}
     local sort_key = collator_obj:make_sort_key(codepoints)

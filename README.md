@@ -147,6 +147,11 @@ The `case_level` option set to `true` compares case on a level of its own,
 before the other tertiary differences. Tailored characters get the case of
 their characters in the root collation.
 
+Han characters are sorted by the order of their Unicode blocks and code
+points. The `han_order` option set to `"radical-stroke"` sorts them by radical
+and number of strokes instead (the order of CLDR's radical-stroke data, used
+by its "unihan" collations). It can only be given to `collator.new`.
+
 Strings that differ only in ignorable characters, or only in variable
 characters with `"blanked"`, are equal for the collator. Set the
 `identical_level` option to `true` to order them by their code points (in
