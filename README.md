@@ -165,12 +165,14 @@ In German or Czech, numbers should be sorted after all other characters. This ca
 The listed scripts are sorted first, in the given order, and the scripts that
 are not listed follow in their default order. The special keyword "others"
 stands for the scripts that are not listed, so the scripts after it are
-sorted at the very end. Digits stay before the letters unless they are
-listed.
+sorted at the very end.
 
 Scripts are given by their English names in lowercase, such as "cyrillic",
 "greek" or "han", or by their ISO 15924 codes, such as "Cyrl", "Grek" or
-"Hani". Hiragana and Katakana are one script ("kana").
+"Hani". Hiragana and Katakana are one script ("kana"). The characters before
+the letters form the groups "space", "punct", "symbol", "currency" and
+"digits" (or "digit"); those that are not listed stay before the others.
+The groups are those of CLDR.
 
 ## Headers for index entries
 

@@ -35,13 +35,15 @@ end
 
 -- names for all the groups that are not listed
 local others = {others = true, zzzz = true}
--- groups that stay at the start when they are not listed
-local special = {digits = true}
+-- groups that stay at the start when they are not listed: CLDR's special
+-- groups
+local special = {space = true, punct = true, symbol = true, currency = true, digits = true}
 
 -- add a script to the reordering, as in CLDR (UTS #35): the listed groups
 -- come first, in the given order; the groups that are not listed come in
 -- their default order at the place of "others", or after the listed ones;
--- the special groups (digits) that are not listed stay at the start
+-- the special groups (space, punct, symbol, currency, digits) that are not
+-- listed stay at the start
 local function reorder(what, blocks)
   blocks.order = blocks.order or {}
   if others[what:lower()] then

@@ -70,7 +70,7 @@ src/lua-uca/lua-uca-root-info.lua: data/FractionalUCA.txt
 src/lua-uca/lua-uca-root-jit.lua: src/lua-uca/lua-uca-root.lua
 	texlua tools/make_root_jit.lua > $@
 
-src/lua-uca/lua-uca-reordering-table.lua: src/lua-uca/lua-uca-root.lua src/lua-uca/lua-uca-root-info.lua data/Scripts.txt data/PropertyValueAliases.txt data/UnicodeData.txt
+src/lua-uca/lua-uca-reordering-table.lua: data/FractionalUCA.txt data/Scripts.txt data/PropertyValueAliases.txt data/UnicodeData.txt
 	mkdir -p src/lua-uca
 	texlua tools/make_reordering_table.lua > $@
 

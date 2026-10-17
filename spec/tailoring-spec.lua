@@ -64,4 +64,19 @@ describe("Test reordering", function()
     -- digits listed
     assert.same({"Привет", "abc", "αβγ", "אבג", "漢字", "123"}, sorted {"Cyrl", "others", "digits"})
   end)
+  it("should reorder the special groups", function()
+    local sorted = function(groups)
+      local c = collator_lib.new(ducet)
+      c:reorder(groups)
+      local t = {"a", "1", "€", "♥", "!"}
+      table.sort(t, function(a,b) return c:compare_strings(a,b) end)
+      return t
+    end
+    -- default: punct, symbol, currency, digits, letters
+    assert.same({"!", "♥", "€", "1", "a"}, sorted {})
+    -- the special groups that are not listed stay at the start
+    assert.same({"€", "1", "♥", "!", "a"}, sorted {"symbol", "punct"})
+    -- CLDR's code for digits
+    assert.same({"!", "♥", "€", "a", "1"}, sorted {"others", "digit"})
+  end)
 end)
