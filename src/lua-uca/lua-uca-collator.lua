@@ -44,6 +44,9 @@ local options = {
   max_variable = {space = true, punct = true, symbol = true, currency = true, ducet = true},
   accents_backward = "boolean",
   identical_level = "boolean",
+  -- "upper", "lower", "off" (or nil)
+  case_first = {upper = true, lower = true, off = true},
+  case_level = "boolean",
 }
 
 local function set_option(self, name, value)
@@ -110,6 +113,8 @@ function collator.new(codes, settings)
   local self = setmetatable({settings = {}}, instance)
   -- tree with mappings from codepoints to collation elements
   self.codes = copy_table(codes or {})
+  -- the root collation, unchanged, for the case of tailored strings
+  self.root_codes = codes or {}
   -- cached sort keys
   self.stringcache = {}
   self.tailoring_multiplier = {1, 1, 1, 1}
@@ -274,11 +279,6 @@ function collator:get_lowest_char(codepoints, pos)
     local newmin, newmax = get_lowest_key(tbl)
     -- this shouldn't happen
     if newmin == minimal then return nil end
-    -- if the collation is set to upperace first, then the lowest character has the hightest
-    -- collation value
-    if self.is_uppercase_first and level == 2 then
-      newmin = newmax
-    end
     return find_codepoints(tbl[newmin], level + 1)
   end
 
@@ -333,6 +333,47 @@ local variable_tops = root_info.variable_tops
 -- primary weight
 local max_quaternary = 0xFFFFFFFF
 
+-- case parameters (UTS #35, Case Parameters): the case value of a collation
+-- element (its case field: 0 uncased or lowercase, 1 mixed, 2 uppercase)
+-- gives a weight c, from uppercase first (case_first = "upper") or lowercase
+-- first; with case_level, c is a level before the tertiary one, without it
+-- c is combined with the tertiary weight, above it
+local case_weight = {
+  upper = {[0] = 3, [1] = 2, [2] = 1},
+  lower = {[0] = 1, [1] = 2, [2] = 3},
+}
+local tertiary_range = 0x10000
+
+local function case_weights(weights, case_first, case_level)
+  local c_of = case_weight[case_first == "upper" and "upper" or "lower"]
+  local new = {}
+  for i, element in ipairs(weights) do
+    local p, s, t = element[1], element[2], element[3]
+    local c = c_of[element.case or 0]
+    local changed
+    if case_level then
+      if p == 0 and s == 0 then
+        -- tertiary and tertiary-ignorable collation elements have no case
+        changed = {0, 0, 0, t}
+      else
+        changed = {p, s, c, t}
+      end
+    else
+      if p == 0 and s == 0 and t == 0 then
+        changed = {0, 0, 0}
+      elseif p == 0 and s == 0 then
+        -- tertiary collation elements: 3, so that they stay above the
+        -- others (UCA's WF2)
+        changed = {0, 0, 3 * tertiary_range + t}
+      else
+        changed = {p, s, c * tertiary_range + t}
+      end
+    end
+    new[i] = changed
+  end
+  return new
+end
+
 -- variable weighting (UTS #10, section 4): the option variable_weighting is
 -- "non-ignorable" (the default), "shifted" or "blanked"
 -- the weights of the variable collation elements and of the ignorable ones
@@ -379,9 +420,12 @@ function collator:make_sort_key(codepoints)
   local original = codepoints
   -- positions of the U+FFFE weights in the secondary level
   local separators = {}
-  -- the number of levels in the collation elements
-  local element_levels = self.is_uppercase_first and 4 or 3
   local settings = self.settings
+  local case_first = settings.case_first
+  if case_first == "off" then case_first = nil end
+  local case_level = settings.case_level
+  -- the number of levels in the collation elements
+  local element_levels = case_level and 4 or 3
   local variable = settings.variable_weighting
   if variable == "non-ignorable" then variable = nil end
   local variable_top = variable_tops[settings.max_variable or "punct"]
@@ -390,6 +434,9 @@ function collator:make_sort_key(codepoints)
     --
     weights, pos, remaining = self:get_weights(codepoints, pos)
     codepoints = remaining or codepoints
+    if case_first or case_level then
+      weights = case_weights(weights, case_first, case_level)
+    end
     if variable then
       weights, after_variable = variable_weights(weights, element_levels, variable == "shifted", after_variable, variable_top)
     end
@@ -510,6 +557,56 @@ end
 
 --- change sorting ordering
 --
+-- the collation elements of codepoints in the root collation
+function collator:root_weights(codepoints)
+  local codes = self.codes
+  self.codes = self.root_codes
+  local weights, pos = {}, 1
+  while pos do
+    local value
+    value, pos = self:get_weights(codepoints, pos)
+    for _, element in ipairs(value) do weights[#weights + 1] = element end
+  end
+  self.codes = codes
+  return weights
+end
+
+-- set the case of the collation elements of a tailored string from its root
+-- collation elements (UTS #35, Case Parameters, Tailored Strings)
+function collator:set_tailored_case(target, value)
+  local root_primaries = {}
+  for _, element in ipairs(self:root_weights(target)) do
+    if element[1] ~= 0 then root_primaries[#root_primaries + 1] = element.case or 0 end
+  end
+  local n = #root_primaries
+  local m = 0
+  for _, element in ipairs(value) do if element[1] ~= 0 then m = m + 1 end end
+  local i = 0
+  for _, element in ipairs(value) do
+    local case = 0
+    if element[1] ~= 0 then
+      i = i + 1
+      if n <= m or i < m then
+        case = root_primaries[i] or 0
+      else
+        -- the last tailored primary gets the case of the remaining root
+        -- primaries: lowercase, uppercase, or mixed
+        local lower, upper = true, true
+        for j = m, n do
+          if root_primaries[j] ~= 0 then lower = false end
+          if root_primaries[j] ~= 2 then upper = false end
+        end
+        case = lower and 0 or upper and 2 or 1
+      end
+    elseif element[2] == 0 and element[3] ~= 0 then
+      -- tertiary collation elements are uppercase
+      case = 2
+    end
+    element.case = case ~= 0 and case or nil
+  end
+  return value
+end
+
 function collator:tailor(base, target, tailoring_table)
   -- get the value of the base character
   local value = self:get_weights(base, 1)
@@ -526,7 +623,7 @@ function collator:tailor(base, target, tailoring_table)
   local is_equivalent = 0
   for _, x in ipairs(tailoring_table) do is_equivalent = is_equivalent + x end
   if is_equivalent == 0 then new_value.equal = true end
-  self:update_codes(target, new_value)
+  self:update_codes(target, self:set_tailored_case(target, new_value))
 end
 
 -- support for CLDR style strings
@@ -555,40 +652,16 @@ function collator:equal(base, target)
   while true do
     value, pos = self:get_weights(target, pos)
     for _, v in ipairs(value) do
-      new_weight[#new_weight + 1] = v
+      new_weight[#new_weight + 1] = {v[1], v[2], v[3], case = v.case}
     end
     if not pos then break end
   end
-  self:update_codes(base, new_weight)
+  self:update_codes(base, self:set_tailored_case(base, new_weight))
 end
 
--- sort uppercase first
+-- sort uppercase first: the same as the option case_first = "upper"
 function collator:uppercase_first()
-  -- the case of a collation element is in its case field (the top bits of the
-  -- tertiary weight in FractionalUCA.txt): 0 lowercase or uncased, 1 mixed,
-  -- 2 uppercase; uppercase sorts first
-  local case_values = {[0] = 3, [1] = 2, [2] = 1}
-  -- we must invert tertiary element in tailoring
-  self.tailoring_multiplier[3] = -1
-  self.is_uppercase_first = true
-
-  local function change_case(element)
-    local value =  element.value or {}
-    for _, collation_element in ipairs(value) do
-      -- make new collation element and insert it before the tertiary element
-      local case = case_values[collation_element.case or 0]
-      table.insert(collation_element, 3, case)
-    end
-    -- recursivelly process children
-    local children = element.children or {}
-    for x, child in pairs(children) do
-      change_case(child)
-    end
-  end
-  for _, element in pairs(self.codes) do
-    change_case(element)
-  end
-
+  self:set {case_first = "upper"}
 end
 
 return collator

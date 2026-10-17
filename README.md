@@ -102,7 +102,8 @@ It is also possible to expand a letter to multiple letters, like this example fo
     tailoring "&ö=oe"
 
 Some languages, like Norwegian, sort uppercase letters before lowercase. This
-can be enabled using `collator_obj:uppercase_first()` function:
+can be enabled using `collator_obj:uppercase_first()` function (the same as
+the `case_first` option set to `"upper"`, see below):
 
     local tailoring = function(s) collator_obj:tailor_string(s) end
     collator_obj:uppercase_first()
@@ -137,6 +138,14 @@ The `max_variable` option selects the variable characters: `"space"`,
 `"punct"` (spaces and punctuation, the default), `"symbol"` (also symbols),
 `"currency"` (also currency signs), or `"ducet"` (those of the Default
 Unicode Collation Element Table, almost all symbols).
+
+The `case_first` option sorts uppercase first (`"upper"`) or lowercase first
+(`"lower"`), before the other tertiary differences, such as those of
+fullwidth forms; large Kana count as uppercase, small ones as lowercase.
+Without it (`"off"`, the default), case is one of the tertiary differences.
+The `case_level` option set to `true` compares case on a level of its own,
+before the other tertiary differences. Tailored characters get the case of
+their characters in the root collation.
 
 Strings that differ only in ignorable characters, or only in variable
 characters with `"blanked"`, are equal for the collator. Set the

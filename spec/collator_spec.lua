@@ -143,6 +143,24 @@ describe("collator test suite",function()
     assert.falsy(shifted("punct"):compare_strings("a-c", "ab"))
     assert.truthy(shifted("space"):compare_strings("a-c", "ab"))
   end)
+  it("case parameters should work", function()
+    local sorted = function(options)
+      local c = collator.new(ducet, options)
+      local t = {"a", "A", "ａ", "Ａ", "ぁ", "あ", "ァ", "ア"}
+      table.sort(t, function(x, y) return c:compare_strings(x, y) end)
+      return t
+    end
+    -- the tertiary weights: case is one of the tertiary differences
+    assert.same({"a", "ａ", "A", "Ａ", "ぁ", "あ", "ァ", "ア"}, sorted {})
+    -- uppercase first; large Kana are "uppercase", small ones "lowercase"
+    assert.same({"A", "Ａ", "a", "ａ", "あ", "ア", "ぁ", "ァ"}, sorted {case_first = "upper"})
+    assert.same({"a", "ａ", "A", "Ａ", "ぁ", "ァ", "あ", "ア"}, sorted {case_first = "lower"})
+    assert.same(sorted {case_first = "lower"}, sorted {case_level = true})
+    -- uppercase_first is case_first = "upper"
+    local c = collator.new(ducet)
+    c:uppercase_first()
+    assert.same("upper", c.settings.case_first)
+  end)
   it("should make sort keys", function()
     local codepoints = {0x0FB2, 0x0F80, string.byte("a")}
     local sort_key = collator_obj:make_sort_key(codepoints)

@@ -90,4 +90,10 @@ describe("Test language support", function()
     assert.same(t, {"丁", "七", "一"})
   end)
 
+  it("tailored characters should get the case of their root collation elements", function()
+    -- Danish tailors ø and Ø after z, with uppercase first
+    local danish = languages.da(collator.new(ducet))
+    assert.truthy(danish:compare_strings("Øl", "øl"))
+    assert.truthy(danish:compare_strings("Ð", "ð"))
+  end)
 end)
