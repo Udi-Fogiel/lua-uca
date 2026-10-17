@@ -135,6 +135,13 @@ local function reorder_collator(collator, blocks)
     update_weights(current)
   end
   collator.reorder_moves = moves
+  -- the moves back, to find the weights before reordering
+  local inverse = {}
+  for _, move in ipairs(moves) do
+    inverse[#inverse + 1] = {move[1] + move[3], move[2] + move[3], -move[3]}
+  end
+  table.sort(inverse, function(x, y) return x[1] < y[1] end)
+  collator.reorder_inverse = inverse
   -- clear the caches
   collator.stringcache = {}
   collator.weight_to_char = nil
@@ -195,6 +202,7 @@ local M = {}
 M.reorder = reorder
 M.reorder_collator = reorder_collator
 M.move_primary = move_primary
-M.tailor_string = tailor_string
+-- CLDR style rules, see collator:tailor_string
+M.tailor_string = function(collator_obj, str) return collator_obj:tailor_string(str) end
 return M
 

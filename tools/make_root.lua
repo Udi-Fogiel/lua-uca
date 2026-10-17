@@ -44,12 +44,18 @@ end
 local mappings, order = {}, {}
 local group_lines = {}
 local radical_ranges = {}
-local version, variable_top, han_ranges
+local version, variable_top, han_ranges, first_trail_byte
+-- the lead bytes of compressible primaries ([top_byte .. COMPRESS])
+local compressible = {}
 local anchors = {}
 for line in io.lines("data/FractionalUCA.txt") do
   local content = line:gsub("%s*#.*$", "")
   if content:match("^%[") then
     version = version or content:match("^%[UCA version = ([%d%.]+)%]")
+    local compress = content:match("^%[top_byte%s+(%x%x)%s.-COMPRESS")
+    if compress then compressible[#compressible + 1] = tonumber(compress, 16) end
+    local trail = content:match("^%[fixed first trail byte (%x%x)%]")
+    if trail then first_trail_byte = tonumber(trail, 16) end
     local top = content:match("^%[variable top = ([%x ]+)%]")
     if top then variable_top = pad(top, 4) end
     -- the radical-stroke order: the Han characters and ranges after the colon
@@ -223,7 +229,31 @@ end
 
 if mode == "info" then
   variable_tops.ducet = ducet_variable_top()
+  -- the primaries of the FDD0 and FDD1 contractions: boundaries of the groups
+  -- and reserved ranges, as weights in use for tailoring
+  local boundaries, seen = {}, {}
+  for _, entry in ipairs(order) do
+    local first = entry.key[1]
+    local primary = entry.value[1] and entry.value[1][1]
+    if (first == 0xFDD0 or first == 0xFDD1) and primary and primary ~= 0 and not seen[primary] then
+      seen[primary] = true
+      boundaries[#boundaries + 1] = primary
+    end
+  end
+  table.sort(boundaries)
+  -- the collation elements of the FDD0 contractions, for the root elements
+  local root_elements = {}
+  for _, entry in ipairs(order) do
+    if entry.key[1] == 0xFDD0 then
+      for _, ce in ipairs(resolve(entry.value)) do root_elements[#root_elements + 1] = ce end
+    end
+  end
   local info = {
+    root_elements = root_elements,
+    boundaries = boundaries,
+    -- the trailing weights start with this lead byte
+    first_trail_byte = first_trail_byte,
+    compressible = compressible,
     version = version,
     variable_top = variable_top,
     variable_tops = variable_tops,
@@ -242,10 +272,16 @@ end
 local root = collation.new()
 for _, entry in ipairs(order) do
   local first = entry.key[1]
-  -- FDD0 and FDD1 contractions mark reserved ranges and the boundaries of
-  -- the groups and scripts, they are not mappings of text
-  if first ~= 0xFDD0 and first ~= 0xFDD1 then
+  -- the FDD1 contractions (the boundaries of the groups and scripts) are
+  -- mappings too, as in ICU (genuca.cpp, collationbasedatabuilder.cpp); FDD1
+  -- FDD0 maps to ICU's first unassigned primary (lead byte, 04 02); the FDD0
+  -- ones (reserved ranges, the numeric lead byte, homeless collation
+  -- elements) are only root elements (in the info)
+  if first ~= 0xFDD0 then
     local value = resolve(entry.value)
+    if first == 0xFDD1 and entry.key[2] == 0xFDD0 then
+      value = {{unassigned_lead * 0x1000000 + 0x040200, 0x0500, 0x0500}}
+    end
     if entry.prefix then
       -- a prefix mapping p|x is the contraction px: CE(p) followed by the
       -- collation elements of x after p
@@ -257,6 +293,10 @@ for _, entry in ipairs(order) do
       for _, codepoint in ipairs(entry.key) do key[#key + 1] = codepoint end
       for _, ce in ipairs(value) do new[#new + 1] = ce end
       root:update_keys(key, new)
+      -- marked, for [suppressContractions] of the character after the prefix
+      local node = root.keys[key[1]]
+      for i = 2, #key do node = node.children[key[i]] end
+      node.prefix = true
     else
       root:update_keys(entry.key, value)
     end

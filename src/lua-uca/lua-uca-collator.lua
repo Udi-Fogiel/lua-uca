@@ -3,6 +3,8 @@ local math = require "math"
 local tailoring_lib
 local reordering_table
 local implicit
+local rules_lib
+local builder
 local root_info
 local ccc
 local uni_normalize
@@ -10,6 +12,8 @@ if kpse then
   tailoring_lib = require "lua-uca.lua-uca-tailoring"
   reordering_table = require "lua-uca.lua-uca-reordering-table"
   implicit = require "lua-uca.lua-uca-implicit"
+  rules_lib = require "lua-uca.lua-uca-rules"
+  builder = require "lua-uca.lua-uca-builder"
   root_info = require "lua-uca.lua-uca-root-info"
   ccc = require "lua-uca.lua-uca-ccc"
   -- in LuaTeX, load the lua-uni-normalize library (it needs Lua 5.3, it
@@ -20,6 +24,8 @@ else
   tailoring_lib = require "lua-uca.tailoring"
   reordering_table = require "lua-uca.reordering-table"
   implicit = require "lua-uca.implicit"
+  rules_lib = require "lua-uca.rules"
+  builder = require "lua-uca.builder"
   root_info = require "lua-uca.root-info"
   ccc = require "lua-uca.ccc"
 end
@@ -47,6 +53,9 @@ local options = {
   -- "upper", "lower", "off" (or nil)
   case_first = {upper = true, lower = true, off = true},
   case_level = "boolean",
+  -- the levels compared: 1 (primary) to 4 (quaternary); nil: three levels,
+  -- four with shifted variable weighting
+  strength = {[1] = true, [2] = true, [3] = true, [4] = true},
   -- the order of Han characters: "implicit" (or nil, the order of the
   -- Unified_Ideograph ranges) or "radical-stroke"; only when the collator is
   -- created
@@ -285,6 +294,7 @@ end
 -- when a discontiguous contraction was matched, the codepoints without the
 -- removed characters are returned as the third value
 function collator:get_weights(codepoints, pos)
+  if rawget(self, "pending_rules") then self:apply_rules() end
   local weights, next_pos, remaining = self:read_weight(codepoints, pos)
   -- return implicit weights for codepoints that are not in the database
   if not weights then
@@ -298,6 +308,7 @@ end
 -- get characters with lowest weight at the given point of the codepoint array
 -- useful for index header strings
 function collator:get_lowest_char(codepoints, pos)
+  if rawget(self, "pending_rules") then self:apply_rules() end
   -- find the lowest key in the table
   local min = math.min
   local max = math.max
@@ -373,8 +384,9 @@ local segment_separator = root_info.merge_separator
 -- and at most the variable top of max_variable
 local variable_tops = root_info.variable_tops
 -- the quaternary weight of the non-ignorable collation elements, above every
--- primary weight
-local max_quaternary = 0xFFFFFFFF
+-- primary weight; with the quaternary differences of tailorings (the
+-- quaternary field, 0 to 3) added
+local common_quaternary = 0xFFFFFFFC
 
 -- case parameters (UTS #35, Case Parameters): the case value of a collation
 -- element (its case field: 0 uncased or lowercase, 1 mixed, 2 uppercase)
@@ -387,7 +399,7 @@ local case_weight = {
 }
 local tertiary_range = 0x10000
 
-local function case_weights(weights, case_first, case_level)
+local function case_weights(weights, case_first, case_level, strength)
   local c_of = case_weight[case_first == "upper" and "upper" or "lower"]
   local new = {}
   for i, element in ipairs(weights) do
@@ -395,9 +407,10 @@ local function case_weights(weights, case_first, case_level)
     local c = c_of[element.case or 0]
     local changed
     if case_level then
-      if p == 0 and s == 0 then
-        -- tertiary and tertiary-ignorable collation elements have no case
-        changed = {0, 0, 0, t}
+      if p == 0 and (s == 0 or strength == 1) then
+        -- tertiary and tertiary-ignorable collation elements have no case,
+        -- at strength 1 neither have the primary ignorable ones
+        changed = {0, s, 0, t}
       else
         changed = {p, s, c, t}
       end
@@ -412,6 +425,7 @@ local function case_weights(weights, case_first, case_level)
         changed = {p, s, c * tertiary_range + t}
       end
     end
+    changed.quaternary = element.quaternary
     new[i] = changed
   end
   return new
@@ -421,13 +435,16 @@ end
 -- "non-ignorable" (the default), "shifted" or "blanked"
 -- the weights of the variable collation elements and of the ignorable ones
 -- after them are reset to zero; shifted adds a quaternary level, with the
--- old primary weight of the variable collation elements, FFFFFFFF for the
--- other non-ignorable ones
-local function variable_weights(weights, levels, shifted, after_variable, variable_top)
+-- old primary weight of the variable collation elements, FFFFFFFC (plus a
+-- tailored quaternary difference) for the other non-ignorable ones
+local function variable_weights(weights, levels, shifted, after_variable, variable_top, inverse)
   local new = {}
   for i, element in ipairs(weights) do
     local reset, quaternary
-    if element[1] > segment_separator and element[1] <= variable_top then
+    -- variable or not by the weight before script reordering (UTS #35)
+    local primary = element[1]
+    if inverse and primary ~= 0 then primary = tailoring_lib.move_primary(primary, inverse) end
+    if primary > segment_separator and primary <= variable_top then
       -- variable collation element
       reset, quaternary, after_variable = true, element[1], true
     elseif element[1] == 0 then
@@ -439,10 +456,10 @@ local function variable_weights(weights, levels, shifted, after_variable, variab
         for level = 2, levels do
           if element[level] ~= 0 then completely_ignorable = false end
         end
-        reset, quaternary = false, completely_ignorable and 0 or max_quaternary
+        reset, quaternary = false, completely_ignorable and 0 or common_quaternary + (element.quaternary or 0)
       end
     else
-      reset, quaternary, after_variable = false, max_quaternary, false
+      reset, quaternary, after_variable = false, common_quaternary + (element.quaternary or 0), false
     end
     local changed = {}
     for level = 1, levels do
@@ -467,10 +484,13 @@ function collator:make_sort_key(codepoints)
   local case_first = settings.case_first
   if case_first == "off" then case_first = nil end
   local case_level = settings.case_level
+  local strength = settings.strength
   -- the number of levels in the collation elements
   local element_levels = case_level and 4 or 3
   local variable = settings.variable_weighting
   if variable == "non-ignorable" then variable = nil end
+  -- the quaternary level: at strength 4, by default with shifted
+  local quaternary = strength == 4 or (strength == nil and variable == "shifted")
   local variable_top = variable_tops[settings.max_variable or "punct"]
   local after_variable = false
   while true do
@@ -478,10 +498,25 @@ function collator:make_sort_key(codepoints)
     weights, pos, remaining = self:get_weights(codepoints, pos)
     codepoints = remaining or codepoints
     if case_first or case_level then
-      weights = case_weights(weights, case_first, case_level)
+      weights = case_weights(weights, case_first, case_level, strength)
     end
     if variable then
-      weights, after_variable = variable_weights(weights, element_levels, variable == "shifted", after_variable, variable_top)
+      weights, after_variable = variable_weights(weights, element_levels, variable == "shifted", after_variable, variable_top, rawget(self, "reorder_inverse"))
+    end
+    if quaternary and variable ~= "shifted" then
+      -- the quaternary weights of the tailorings
+      local new = {}
+      for i, element in ipairs(weights) do
+        local changed = {}
+        local ignorable = true
+        for level = 1, element_levels do
+          changed[level] = element[level]
+          if element[level] ~= 0 then ignorable = false end
+        end
+        changed[element_levels + 1] = ignorable and 0 or common_quaternary + (element.quaternary or 0)
+        new[i] = changed
+      end
+      weights = new
     end
     if settings.accents_backward then
       for _, element in ipairs(weights) do
@@ -499,7 +534,7 @@ function collator:make_sort_key(codepoints)
   -- (df) Reverse sort for accents?
   -- the secondary weights are reversed in each segment between the U+FFFE
   -- weights (UTS #10, S3.6), the U+FFFE weights stay in place
-  if settings.accents_backward and levels[2] then
+  if settings.accents_backward and levels[2] and strength ~= 1 then
     local secondary = levels[2]
     separators[#separators + 1] = #secondary + 1
     local start = 1
@@ -513,9 +548,14 @@ function collator:make_sort_key(codepoints)
       start = separator + 1
     end
   end
-  -- every level is in the sort key, also when it has no weights
-  local max_level = element_levels + (variable == "shifted" and 1 or 0)
-  for i = 1, max_level do
+  -- every level up to the strength is in the sort key, also when it has no
+  -- weights: primary, secondary, the case level, tertiary, quaternary
+  local included = {1}
+  if strength ~= 1 then included[#included + 1] = 2 end
+  if case_level then included[#included + 1] = 3 end
+  if strength == nil or strength >= 3 then included[#included + 1] = element_levels end
+  if quaternary then included[#included + 1] = element_levels + 1 end
+  for _, i in ipairs(included) do
     for _, element in ipairs(levels[i] or {}) do
       table.insert(sort_key, element)
     end
@@ -651,6 +691,7 @@ function collator:set_tailored_case(target, value)
 end
 
 function collator:tailor(base, target, tailoring_table)
+  if rawget(self, "pending_rules") then self:apply_rules() end
   -- get the value of the base character
   local value = self:get_weights(base, 1)
   local new_value = {}
@@ -670,13 +711,125 @@ function collator:tailor(base, target, tailoring_table)
 end
 
 -- support for CLDR style strings
+-- the settings of the rule syntax (checked by the parser), as options
+local rule_settings = {
+  strength = function(self, value)
+    if value == "I" then
+      self:set {strength = 4, identical_level = true}
+    else
+      self:set {strength = value}
+    end
+  end,
+  alternate = function(self, value) self:set {variable_weighting = value} end,
+  backwards = function(self) self:set {accents_backward = true} end,
+  caseLevel = function(self, value) self:set {case_level = value} end,
+  caseFirst = function(self, value) self:set {case_first = value} end,
+  maxVariable = function(self, value) self:set {max_variable = value} end,
+  -- the input is always normalized when it can be
+  normalization = function() end,
+  numericOrdering = function(self, value)
+    if value then error("lua-uca: [numericOrdering on] is not supported", 0) end
+  end,
+  hiraganaQ = function() end,
+  import = function(self, value) error("lua-uca: [import " .. value .. "] is not supported", 0) end,
+  -- only makes the tables smaller in ICU
+  optimize = function() end,
+  -- applied by the builder, where it occurs in the rules
+  suppressContractions = function() end,
+}
+
+-- TODO: exact checks with lua-normalization once it is released: an NFC
+-- boundary before c when the first character of its canonical decomposition
+-- has combining class 0 and NFC_QC is not Maybe (ICU's hasBoundaryBefore);
+-- NFD-inert from its decompositions, also without lua-uni-normalize
+-- the checks of the parser: a character starts an NFC boundary (approximated:
+-- combining class 0, not a Hangul vowel or trailing consonant, and its NFD
+-- starting with combining class 0), a character is NFD-inert (combining
+-- class 0 and no canonical decomposition); without lua-uni-normalize, only
+-- the combining classes are checked
+local function nfd_of(c)
+  if not uni_normalize then return {c} end
+  local list = {}
+  for _, code in utf8.codes(uni_normalize.NFD(utf8.char(c))) do list[#list + 1] = code end
+  return list
+end
+local rule_checks = {
+  boundary = function(c)
+    if ccc[c] or (c >= 0x1161 and c <= 0x1175) or (c >= 0x11A8 and c <= 0x11C2) then return false end
+    return not ccc[nfd_of(c)[1]]
+  end,
+  inert = function(c)
+    if ccc[c] then return false end
+    local nfd = nfd_of(c)
+    return #nfd == 1 and nfd[1] == c
+  end,
+}
+
+-- support for CLDR style rules (UTS #35, Collation Tailorings); the rules of
+-- several calls are collected and built together when the collator is used,
+-- as one rule text, so that the new weights of all of them are spaced in
+-- their gaps at once
 function collator:tailor_string(s)
-  tailoring_lib.tailor_string(self, s)
+  -- the escapes are those of the rules in data (ICU's u_unescape)
+  local items = rules_lib.parse(rules_lib.unescape(s), rule_checks)
+  local pending = rawget(self, "pending_rules")
+  if not pending then
+    pending = {}
+    rawset(self, "pending_rules", pending)
+  end
+  for _, item in ipairs(items) do pending[#pending + 1] = item end
+end
+
+-- build the collected rules
+-- the start of the Han group, for [last regular]
+local han_group_start
+for _, group in ipairs(reordering_table) do
+  if group.name == "han" then han_group_start = group.min end
+end
+
+-- as ICU, a tailoring is built from the root with all of its rules: the
+-- rules of a new call are added to the earlier ones, and the table is built
+-- again (changes made with the tailor and equal methods are lost); the
+-- reordering and the Han order are applied again
+function collator:apply_rules()
+  local pending = rawget(self, "pending_rules")
+  if not pending then return end
+  rawset(self, "pending_rules", nil)
+  local items = rawget(self, "rule_items") or {}
+  for _, item in ipairs(pending) do items[#items + 1] = item end
+  rawset(self, "rule_items", items)
+  self.codes = copy_table(self.root_codes)
+  rawset(self, "reorder_moves", nil)
+  rawset(self, "reorder_inverse", nil)
+  if rawget(self, "han_ranges") then self:use_radical_stroke() end
+  builder.build(self, items, {
+    implicit = implicit,
+    root_info = root_info,
+    han_ranges = rawget(self, "han_ranges") or han_ranges,
+    han_group_start = han_group_start,
+  })
+  local reorder
+  for _, item in ipairs(items) do
+    if item.kind == "setting" then
+      if item.name == "reorder" then
+        reorder = #item.value > 0 and item.value or {"others"}
+      elseif rule_settings[item.name] then
+        rule_settings[item.name](self, item.value)
+      else
+        error("lua-uca: the setting [" .. item.name .. "] is not supported", 0)
+      end
+    end
+  end
+  reorder = reorder or rawget(self, "reorder_codes")
+  if reorder then self:reorder(reorder) end
 end
 
 -- reorder scripts
 -- pass table with script names to reorder
 function collator:reorder(tbl)
+  if rawget(self, "pending_rules") then self:apply_rules() end
+  -- kept, to be applied again when new rules are built
+  rawset(self, "reorder_codes", tbl)
   -- make table of the reordering table
   local t = copy_table(reordering_table)
   for _, script in ipairs(tbl) do
@@ -689,6 +842,7 @@ end
 
 -- expand characters to another characters
 function collator:equal(base, target)
+  if rawget(self, "pending_rules") then self:apply_rules() end
   local new_weight = {}
   local value, pos
   pos = 1
