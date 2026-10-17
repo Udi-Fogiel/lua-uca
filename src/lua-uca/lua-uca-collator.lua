@@ -12,8 +12,10 @@ if kpse then
   implicit = require "lua-uca.lua-uca-implicit"
   root_info = require "lua-uca.lua-uca-root-info"
   ccc = require "lua-uca.lua-uca-ccc"
-  -- in LuaTeX, load the lua-uni-normalize library
-  uni_normalize = require "lua-uni-normalize"
+  -- in LuaTeX, load the lua-uni-normalize library (it needs Lua 5.3, it
+  -- cannot be loaded in LuaJITTeX)
+  local ok, library = pcall(require, "lua-uni-normalize")
+  if ok then uni_normalize = library end
 else
   tailoring_lib = require "lua-uca.tailoring"
   reordering_table = require "lua-uca.reordering-table"

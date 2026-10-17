@@ -1,5 +1,7 @@
 
 local floor = math.floor
+-- LuaJIT has no utf8 library
+local utf8 = utf8 or require "lua-utf8"
 
 -- search value in table with ranges
 -- source: Xindex
@@ -170,7 +172,10 @@ local function tailor_string(collator_obj, str)
     if fn:match("%*$") then  -- Ending with "*" like "<*"
       fn = fn:sub(1, -2)
       local exec = functions[fn]
-      for char in second:gmatch(utf8.charpattern) do
+      -- not utf8.charpattern: it has a NUL byte, which LuaJIT's patterns
+      -- cannot contain
+      for _, code in utf8.codes(second) do
+        local char = utf8.char(code)
         exec(first, char)
         first = char
       end

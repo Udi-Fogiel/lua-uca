@@ -58,7 +58,10 @@ in Lua by Herbert Voß. It has built-in `Lua-UCA` support starting with version
 
 ## Use with LuaJIT
 
-The default version of `lua-uca-root` fails with Luajit. You can use alternative version of this file, `lua-uca-root-jit` (or `lua-uca-ducet-jit`).
+The default version of `lua-uca-root` fails with Luajit. You can use alternative version of this file, `lua-uca-root-jit` (or `lua-uca-ducet-jit`). The
+[lua-utf8](https://github.com/starwing/luautf8) library is needed. The
+`lua-uni-normalize` library does not work with LuaJIT, so strings are not
+normalized.
 
 ## Use with OpTeX
 See [OpTeX trick 187](https://petr.olsak.net/optex/optex-tricks.html#ucasort) for instructions
