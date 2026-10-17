@@ -1,8 +1,9 @@
 -- run the UCA conformance tests (UTS #10, section 12.2)
 -- texlua tools/conformance.lua [file ...]
 -- the default files are CLDR's tests of its root collation and the UCA's
--- non-ignorable tests (same order), in data/CollationTest; the files with
--- SHIFTED in their names are run with shifted variable weighting
+-- tests, in data/CollationTest; the files with SHIFTED in their names are run
+-- with shifted variable weighting, the UCA's with the DUCET's variable
+-- characters
 -- each line must be greater than or equal to the previous one, compared
 -- with the identical level
 kpse.set_program_name "luatex"
@@ -19,7 +20,7 @@ local files = {}
 for i = 1, #arg do files[i] = arg[i] end
 if #files == 0 then
   for _, name in ipairs {"CLDR_NON_IGNORABLE_SHORT", "CLDR_NON_IGNORABLE", "CLDR_SHIFTED_SHORT", "CLDR_SHIFTED",
-    "NON_IGNORABLE_SHORT", "NON_IGNORABLE"} do
+    "NON_IGNORABLE_SHORT", "NON_IGNORABLE", "SHIFTED_SHORT", "SHIFTED"} do
     files[#files + 1] = "data/CollationTest/CollationTest_" .. name .. ".txt"
   end
 end
@@ -34,9 +35,12 @@ end
 
 local failed = false
 for _, filename in ipairs(files) do
-  local collator_obj = collator.new(ducet)
-  collator_obj.identical_level = true
-  if filename:match("SHIFTED") then collator_obj.variable_weighting = "shifted" end
+  -- the UCA's tests use the DUCET's variable characters, CLDR's its own
+  local collator_obj = collator.new(ducet, {
+    identical_level = true,
+    variable_weighting = filename:match("SHIFTED") and "shifted" or nil,
+    max_variable = not filename:match("CLDR") and "ducet" or nil,
+  })
   local previous, previous_line
   local lines, errors = 0, 0
   for line in io.lines(filename) do

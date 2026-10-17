@@ -41,6 +41,7 @@ local function codepoints(s)
 end
 
 local mappings, order = {}, {}
+local group_lines = {}
 local version, variable_top, han_ranges
 local anchors = {}
 for line in io.lines("data/FractionalUCA.txt") do
@@ -66,6 +67,11 @@ for line in io.lines("data/FractionalUCA.txt") do
       anchors[name] = element(fields[1] or "", fields[2] or "", fields[3] or "")
     end
   else
+    -- the first primaries of the special groups
+    local group = line:match("#%s*(%u+) first primary")
+    if group and line:match("^FDD1 ") then
+      group_lines[group] = {content = content, new_lead_byte = line:match("starts new lead byte") ~= nil}
+    end
     local prefix, key, ces = content:match("^([%x ]-)%s*|%s*([%x ]+);%s*(.+)$")
     if not prefix then key, ces = content:match("^([%x ]+);%s*(.+)$") end
     if key then
@@ -131,10 +137,55 @@ local function resolve(value)
   return value
 end
 
+-- the variable top for each value of max_variable: the last primary
+-- before the next group; a group that starts a new lead byte starts at that
+-- byte, otherwise at the top 16 bits of its first primary (as ICU's
+-- scriptStarts)
+local function group_start(name)
+  local group = assert(group_lines[name], "no first primary for " .. name)
+  local primary = mappings[table.concat(codepoints(group.content:match("^([%x ]+);")), " ")].value[1][1]
+  if group.new_lead_byte then return primary & 0xFF000000 end
+  return primary & 0xFFFF0000
+end
+local variable_tops = {
+  space = group_start("PUNCTUATION") - 1,
+  punct = group_start("SYMBOL") - 1,
+  symbol = group_start("CURRENCY") - 1,
+  currency = group_start("DIGIT") - 1,
+}
+assert(variable_tops.punct == variable_top, "the variable top is not the end of punct")
+
+-- the DUCET's variable characters (allkeys.txt) as a variable top: the
+-- highest root primary of a character that is variable in the DUCET; the
+-- order is the same, so the non-variable ones are all above it
+local function ducet_variable_top()
+  local ducet = collation.new()
+  local file = assert(io.open("data/allkeys.txt"))
+  ducet:load_ducet(file:read("a"))
+  file:close()
+  local top, lowest_other = 0, math.huge
+  for codepoint, node in pairs(ducet.keys) do
+    local entry = mappings[tostring(codepoint)]
+    local ce = node.value and node.value[1]
+    if entry and ce and ce[1] ~= 0 and not entry.value[1].reference then
+      local primary = entry.value[1][1]
+      if ce.type == "*" then
+        top = math.max(top, primary)
+      elseif primary > merge_separator then
+        lowest_other = math.min(lowest_other, primary)
+      end
+    end
+  end
+  assert(top < lowest_other, "the DUCET's variable characters are not a range of root primaries")
+  return top
+end
+
 if mode == "info" then
+  variable_tops.ducet = ducet_variable_top()
   local info = {
     version = version,
     variable_top = variable_top,
+    variable_tops = variable_tops,
     merge_separator = merge_separator,
     unassigned_lead = unassigned_lead,
     common_secondary = 0x0500,

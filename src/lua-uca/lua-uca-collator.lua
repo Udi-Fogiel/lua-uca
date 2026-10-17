@@ -29,7 +29,45 @@ if jit then
 end
 
 local collator = {}
-collator.__index = collator
+
+-- the options that apply when sort keys are made; they are kept in
+-- collator_obj.settings, set by collator.new(codes, options), by
+-- collator_obj:set(options), or by assigning them as fields of the collator
+-- object; a change clears the cache of sort keys
+local options = {
+  -- "non-ignorable" (or nil), "shifted", "blanked"
+  variable_weighting = {["non-ignorable"] = true, shifted = true, blanked = true},
+  -- the variable characters: "space", "punct" (or nil, CLDR's default),
+  -- "symbol", "currency", or "ducet" (those of the DUCET)
+  max_variable = {space = true, punct = true, symbol = true, currency = true, ducet = true},
+  accents_backward = "boolean",
+  identical_level = "boolean",
+}
+
+local function set_option(self, name, value)
+  local allowed = options[name]
+  if not allowed then error("lua-uca: unknown option " .. tostring(name), 3) end
+  if value ~= nil then
+    if allowed == "boolean" then
+      if type(value) ~= "boolean" then error("lua-uca: option " .. name .. " must be a boolean", 3) end
+    elseif not allowed[value] then
+      error("lua-uca: wrong value for option " .. name .. ": " .. tostring(value), 3)
+    end
+  end
+  rawget(self, "settings")[name] = value
+  rawset(self, "stringcache", {})
+end
+
+local instance = {
+  __index = collator,
+  __newindex = function(self, name, value)
+    if options[name] then
+      set_option(self, name, value)
+    else
+      rawset(self, name, value)
+    end
+  end,
+}
 
 -- Unicode normalization: the UCA requires NFD, used by default when
 -- lua-uni-normalize is available
@@ -66,13 +104,20 @@ end
 
 collator.copy_table = copy_table
 
-function collator.new(codes)
-  local self = setmetatable({}, collator)
+function collator.new(codes, settings)
+  local self = setmetatable({settings = {}}, instance)
   -- tree with mappings from codepoints to collation elements
   self.codes = copy_table(codes or {})
   -- cached sort keys
   self.stringcache = {}
   self.tailoring_multiplier = {1, 1, 1, 1}
+  for name, value in pairs(settings or {}) do set_option(self, name, value) end
+  return self
+end
+
+-- change options
+function collator:set(settings)
+  for name, value in pairs(settings) do set_option(self, name, value) end
   return self
 end
 
@@ -280,19 +325,19 @@ end
 -- levels (UTS #10, 10.1.5)
 local segment_separator = root_info.merge_separator
 -- the primary weights of the variable collation elements are above U+FFFE's
--- and at most the variable top
-local variable_top = root_info.variable_top
+-- and at most the variable top of max_variable
+local variable_tops = root_info.variable_tops
 -- the quaternary weight of the non-ignorable collation elements, above every
 -- primary weight
 local max_quaternary = 0xFFFFFFFF
 
--- variable weighting (UTS #10, section 4): collator_obj.variable_weighting is
+-- variable weighting (UTS #10, section 4): the option variable_weighting is
 -- "non-ignorable" (the default), "shifted" or "blanked"
 -- the weights of the variable collation elements and of the ignorable ones
 -- after them are reset to zero; shifted adds a quaternary level, with the
 -- old primary weight of the variable collation elements, FFFFFFFF for the
 -- other non-ignorable ones
-local function variable_weights(weights, levels, shifted, after_variable)
+local function variable_weights(weights, levels, shifted, after_variable, variable_top)
   local new = {}
   for i, element in ipairs(weights) do
     local reset, quaternary
@@ -334,17 +379,19 @@ function collator:make_sort_key(codepoints)
   local separators = {}
   -- the number of levels in the collation elements
   local element_levels = self.is_uppercase_first and 4 or 3
-  local variable = self.variable_weighting
+  local settings = self.settings
+  local variable = settings.variable_weighting
   if variable == "non-ignorable" then variable = nil end
+  local variable_top = variable_tops[settings.max_variable or "punct"]
   local after_variable = false
   while true do
     --
     weights, pos, remaining = self:get_weights(codepoints, pos)
     codepoints = remaining or codepoints
     if variable then
-      weights, after_variable = variable_weights(weights, element_levels, variable == "shifted", after_variable)
+      weights, after_variable = variable_weights(weights, element_levels, variable == "shifted", after_variable, variable_top)
     end
-    if self.accents_backward then
+    if settings.accents_backward then
       for _, element in ipairs(weights) do
         if element[1] == segment_separator then
           separators[#separators + 1] = #(levels[2] or {}) + 1
@@ -360,7 +407,7 @@ function collator:make_sort_key(codepoints)
   -- (df) Reverse sort for accents?
   -- the secondary weights are reversed in each segment between the U+FFFE
   -- weights (UTS #10, S3.6), the U+FFFE weights stay in place
-  if self.accents_backward and levels[2] then
+  if settings.accents_backward and levels[2] then
     local secondary = levels[2]
     separators[#separators + 1] = #secondary + 1
     local start = 1
@@ -386,7 +433,7 @@ function collator:make_sort_key(codepoints)
   -- the identical level (UTS #10, S3.10): the NFD code points, shifted by 2
   -- so that they are above the level separator, U+FFFE with the minimal
   -- weight 1
-  if self.identical_level then
+  if settings.identical_level then
     local nfd = original
     if normalize_method ~= "NFD" and uni_normalize then
       nfd = {}

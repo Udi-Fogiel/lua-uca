@@ -108,6 +108,41 @@ describe("collator test suite",function()
     -- canonical equivalents are still equal
     assert.same(c:make_sort_key(c:string_to_codepoints("é")), c:make_sort_key(c:string_to_codepoints("e\u{301}")))
   end)
+  it("options should work", function()
+    local key = function(c, s) return c:make_sort_key(c:string_to_codepoints(s)) end
+    -- options at the creation, or with set
+    local c = collator.new(ducet, {variable_weighting = "blanked"})
+    assert.same(key(c, "deluge"), key(c, "de-luge"))
+    c:set {variable_weighting = "non-ignorable"}
+    assert.falsy(c:compare_strings("deluge", "de-luge") == c:compare_strings("de-luge", "deluge"))
+    -- the cache of sort keys is cleared when an option changes, also when it
+    -- is assigned as a field
+    local d = collator.new(ducet)
+    local before = d:compare_strings("de-luge", "deluge")
+    d.variable_weighting = "blanked"
+    assert.falsy(d:compare_strings("de-luge", "deluge"))
+    assert.falsy(d:compare_strings("deluge", "de-luge"))
+    assert.truthy(before)
+    -- unknown options and wrong values are errors
+    assert.falsy(pcall(collator.new, ducet, {variable = "shifted"}))
+    assert.falsy(pcall(collator.new, ducet, {variable_weighting = "ignore"}))
+    assert.falsy(pcall(function() d.identical_level = "yes" end))
+  end)
+  it("max_variable should work", function()
+    -- with shifted, symbols are variable with "symbol" and "ducet", not with
+    -- "punct" (the default)
+    local shifted = function(max) return collator.new(ducet, {variable_weighting = "shifted", max_variable = max}) end
+    -- a non-variable symbol sorts before the letters, so "a♥b" < "aa"; an
+    -- ignored one leaves "ab" > "aa"
+    local ignored = function(c) return not c:compare_strings("a\u{2665}b", "aa") end
+    assert.falsy(ignored(shifted()))
+    assert.falsy(ignored(shifted("punct")))
+    assert.truthy(ignored(shifted("symbol")))
+    assert.truthy(ignored(shifted("ducet")))
+    -- punctuation is variable with "punct", not with "space"
+    assert.falsy(shifted("punct"):compare_strings("a-c", "ab"))
+    assert.truthy(shifted("space"):compare_strings("a-c", "ab"))
+  end)
   it("should make sort keys", function()
     local codepoints = {0x0FB2, 0x0F80, string.byte("a")}
     local sort_key = collator_obj:make_sort_key(codepoints)

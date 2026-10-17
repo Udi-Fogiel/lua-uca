@@ -111,19 +111,34 @@ can be enabled using `collator_obj:uppercase_first()` function:
     tailoring("&oe<<œ<<<Œ")
 
 
-Some languages, for example Canadian French, sort accent backwards, like gêne < gëne < gêné. 
-In this case, you can set the `collator_obj.accents_backward` variable to `true`.
+### Options
 
-Spaces, punctuation and most symbols are variable characters. By default,
-they are sorted as the other characters (`"non-ignorable"`). Set the
-`collator_obj.variable_weighting` variable to `"shifted"` to ignore them,
-unless the strings are otherwise equal, so that "de luge", "de-luge" and
-"deluge" sort together, or to `"blanked"` to ignore them completely.
+Options can be given when the collator is created, changed later with the
+`set` method, or set as fields of the collator object:
+
+    local collator_obj = collator.new(root, {variable_weighting = "shifted"})
+    collator_obj:set {identical_level = true}
+    collator_obj.accents_backward = true
+
+Some languages, for example Canadian French, sort accent backwards, like
+gêne < gëne < gêné. In this case, set the `accents_backward` option to
+`true`.
+
+Spaces and punctuation are variable characters. By default, they are sorted
+as the other characters (`"non-ignorable"`). Set the `variable_weighting`
+option to `"shifted"` to ignore them, unless the strings are otherwise equal,
+so that "de luge", "de-luge" and "deluge" sort together, or to `"blanked"`
+to ignore them completely.
+
+The `max_variable` option selects the variable characters: `"space"`,
+`"punct"` (spaces and punctuation, the default), `"symbol"` (also symbols),
+`"currency"` (also currency signs), or `"ducet"` (those of the Default
+Unicode Collation Element Table, almost all symbols).
 
 Strings that differ only in ignorable characters, or only in variable
 characters with `"blanked"`, are equal for the collator. Set the
-`collator_obj.identical_level` variable to `true` to order them by their
-code points (in NFD) instead.
+`identical_level` option to `true` to order them by their code points (in
+NFD) instead.
 
 
 % More information on a new language support is in the `HACKING.md`
