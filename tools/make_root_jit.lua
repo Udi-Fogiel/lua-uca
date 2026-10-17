@@ -1,7 +1,7 @@
---- split-duect.lua
--- run: lua split-duect.lua > lua-uca-ducet.lua
+-- split the root table into parts, for LuaJIT
+-- run: texlua tools/make_root_jit.lua > src/lua-uca/lua-uca-root-jit.lua
 package.path = package.path .. ";src/?.lua"
-local ducet = require "lua-uca.lua-uca-ducet"
+local ducet = require "lua-uca.lua-uca-root"
 
 local function encode(tbl)
   local ret = {}

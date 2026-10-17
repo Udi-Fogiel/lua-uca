@@ -101,12 +101,6 @@ local function move_primary(weight, moves)
   return range and weight + range[3] or weight
 end
 
--- the primary weights of implicit weights start a pair of collation
--- elements; the second one is not a primary weight of a group
-local function is_implicit_lead(weight)
-  return weight >= 0xFB00 and weight <= 0xFBFF
-end
-
 local function reorder_collator(collator, blocks)
   local moves = make_moves(blocks)
   -- the weights moved by a previous reordering are moved back first: the
@@ -120,16 +114,11 @@ local function reorder_collator(collator, blocks)
     table.sort(undo, function(x, y) return x[1] < y[1] end)
   end
   local function update_value(value)
-    local continuation = false
     for _, element in ipairs(value) do
       local weight = element[1]
       if undo then weight = move_primary(weight, undo) end
-      if not continuation and weight ~= 0 then
-        element[1] = move_primary(weight, moves)
-      else
-        element[1] = weight
-      end
-      continuation = is_implicit_lead(weight)
+      if weight ~= 0 then weight = move_primary(weight, moves) end
+      element[1] = weight
     end
   end
   local function update_weights(entry)

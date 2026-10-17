@@ -8,21 +8,24 @@ describe("collator test suite",function()
     assert.truthy(collator_obj.codes[string.byte("a")])
   end)
   it("implicit weights should work", function()
-    -- 
+    -- unassigned code points, as ICU: lead byte E4, then the code point + 1
+    -- in three bytes (the last with gaps of 13)
     local weight, pos = collator:get_implicit_weight({2222}, 1)
-    assert.truthy(weight)
-    assert.truthy(type(weight) == "table")
-    assert.same({{0xFBC0, 0x20, 0x02}, {0x88AE, 0, 0}}, weight)
+    assert.same({{0xE4047D80, 0x0500, 0x0500}}, weight)
     assert.truthy(pos==2)
-    -- core Han, other Han, Tangut
-    assert.same({{0xFB40, 0x20, 0x02}, {0xCE00, 0, 0}}, collator:get_implicit_weight({0x4E00}, 1))
-    assert.same({{0xFB80, 0x20, 0x02}, {0xB400, 0, 0}}, collator:get_implicit_weight({0x3400}, 1))
-    assert.same({{0xFB84, 0x20, 0x02}, {0x8000, 0, 0}}, collator:get_implicit_weight({0x20000}, 1))
-    assert.same({{0xFB00, 0x20, 0x02}, {0x8000, 0, 0}}, collator:get_implicit_weight({0x17000}, 1))
+    -- Han in the order of the Unified_Ideograph ranges, three-byte primaries
+    -- with step 2: core Han first, then Extension A, then the others
+    assert.same({{0xE0020200, 0x0500, 0x0500}}, collator:get_implicit_weight({0x4E00}, 1))
+    assert.same({{0xE0020400, 0x0500, 0x0500}}, collator:get_implicit_weight({0x4E01}, 1))
+    local core = collator:get_implicit_weight({0x9FFF}, 1)[1][1]
+    local extension_a = collator:get_implicit_weight({0x3400}, 1)[1][1]
+    local extension_b = collator:get_implicit_weight({0x20000}, 1)[1][1]
+    assert.truthy(core < extension_a and extension_a < extension_b)
+    assert.truthy(extension_b < collator:get_implicit_weight({0xE0000}, 1)[1][1])
   end)
   it("implicit weights should sort Han after the explicit weights", function()
-    -- cuneiform U+12034 has the highest explicit primary weights
-    -- the Kangxi radical U+2F00 has explicit weights, a tertiary variant of U+4E00
+    -- U+12034 is a cuneiform sign, with explicit weights
+    -- the Kangxi radical U+2F00 refers to U+4E00, with another tertiary weight
     local a = collator_obj:make_sort_key({0x12034})
     local b = collator_obj:make_sort_key({0x2F00})
     local c = collator_obj:make_sort_key({0x4E00})

@@ -7,7 +7,10 @@ It is mainly intended for use with Lua\TeX and working \TeX\ distribution, but i
 Lua module. You will need to install a required [Lua-uni-algos](https://github.com/latex3/lua-uni-algos) package by hand
 in that case.
 
-It conforms to the Unicode Collation Algorithm version 18.0.0.
+The root collation order is CLDR's, the base of the language rules: the order
+of the Unicode Collation Algorithm (UCA) version 18.0.0, in which only spaces
+and punctuation are variable characters. The `lua-uca-root` module contains
+it; the older name `lua-uca-ducet` gives the same table.
 
 
 ## Usage
@@ -16,11 +19,11 @@ To sort a table using Czech collation rules:
 
    
     kpse.set_program_name "luatex"
-    local ducet = require "lua-uca.lua-uca-ducet"
+    local root = require "lua-uca.lua-uca-root"
     local collator = require "lua-uca.lua-uca-collator"
     local languages = require "lua-uca.lua-uca-languages"
     
-    local collator_obj = collator.new(ducet)
+    local collator_obj = collator.new(root)
     -- load Czech rules
     collator_obj = languages.cs(collator_obj)
     
@@ -55,7 +58,7 @@ in Lua by Herbert Voß. It has built-in `Lua-UCA` support starting with version
 
 ## Use with LuaJIT
 
-The default version of `lua-uca-ducet` fails with Luajit. You can use alternative version of this file, `lua-uca-ducet-jit`.
+The default version of `lua-uca-root` fails with Luajit. You can use alternative version of this file, `lua-uca-root-jit` (or `lua-uca-ducet-jit`).
 
 ## Use with OpTeX
 See [OpTeX trick 187](https://petr.olsak.net/optex/optex-tricks.html#ucasort) for instructions
@@ -74,11 +77,11 @@ language](https://www.unicode.org/reports/tr35/tr35-collation.html#Orderings).
 Full example with Czech rules:
 
     kpse.set_program_name "luatex"
-    local ducet = require "lua-uca.lua-uca-ducet"
+    local root = require "lua-uca.lua-uca-root"
     local collator = require "lua-uca.lua-uca-collator"
     local languages = require "lua-uca.lua-uca-languages"
     
-    local collator_obj = collator.new(ducet)
+    local collator_obj = collator.new(root)
     local tailoring = function(s) collator_obj:tailor_string(s) end
 
     tailoring "&c<č<<<Č"
@@ -161,7 +164,7 @@ for correct first character for a given language that can be used for example as
 When normalization is used, the characters are returned in NFC.
 
 
-    local czech = collator.new(ducet)
+    local czech = collator.new(root)
     languages.cs(czech)
     -- first we need to convert string to codepoints
     local codepoints = czech:string_to_codepoints("Chrobák")
@@ -187,7 +190,6 @@ The normalization method can be changed using the `collation.use_nfc()` and
 
 # What is missing
 
-- Algorithm for setting implicit sort weights of characters that are not explicitly listed in DUCET.
 - Special handling of CJK scripts.
 
 \iffalse

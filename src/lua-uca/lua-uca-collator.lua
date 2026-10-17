@@ -3,12 +3,14 @@ local math = require "math"
 local tailoring_lib
 local reordering_table
 local implicit
+local root_info
 local ccc
 local uni_normalize
 if kpse then
   tailoring_lib = require "lua-uca.lua-uca-tailoring"
   reordering_table = require "lua-uca.lua-uca-reordering-table"
   implicit = require "lua-uca.lua-uca-implicit"
+  root_info = require "lua-uca.lua-uca-root-info"
   ccc = require "lua-uca.lua-uca-ccc"
   -- in LuaTeX, load the lua-uni-normalize library
   uni_normalize = require "lua-uni-normalize"
@@ -16,6 +18,7 @@ else
   tailoring_lib = require "lua-uca.tailoring"
   reordering_table = require "lua-uca.reordering-table"
   implicit = require "lua-uca.implicit"
+  root_info = require "lua-uca.root-info"
   ccc = require "lua-uca.ccc"
 end
 
@@ -108,44 +111,21 @@ function collator:weight_to_codepoints(codes)
   return weights
 end
 
--- ranges for implicit weights, UTS #10 section 10.1.3, generated from the
--- Unicode data of the DUCET (tools/make_implicit.lua)
-local core_han = implicit.core_han
-local other_han = implicit.other_han
-local implicit_blocks = implicit.blocks
-
-local function in_ranges(ranges, codepoint)
-  for _, range in ipairs(ranges) do
-    if codepoint >= range[1] and codepoint <= range[2] then return true end
-  end
-  return false
-end
+-- implicit weights (computed as in ICU), for the characters without mappings
+-- in the root collation (lua-uca-root.lua, from CLDR's FractionalUCA.txt)
+local han_ranges = implicit.han_ranges(root_info.han_ranges, root_info.unassigned_lead)
 
 function collator:get_implicit_weight(codepoints, pos)
-  -- implicit weight is based on the codepoint value: two collation elements,
-  -- [.AAAA.0020.0002][.BBBB.0000.0000]
+  -- Han by the order of the Unified_Ideograph ranges, the others by their
+  -- code point
   local codepoint = codepoints[pos]
-  local first, second
-  for _, block in ipairs(implicit_blocks) do
-    if codepoint >= block[1] and codepoint <= block[2] then
-      first, second = block[3], (codepoint - block[4]) | 0x8000
-      break
-    end
-  end
-  if not first then
-    local base = 0xFBC0
-    if in_ranges(core_han, codepoint) then
-      base = 0xFB40
-    elseif in_ranges(other_han, codepoint) then
-      base = 0xFB80
-    end
-    first, second = base + (codepoint >> 15), (codepoint & 0x7FFF) | 0x8000
-  end
+  local primary = implicit.han_primary(codepoint, han_ranges)
+    or implicit.unassigned_primary(codepoint, root_info.unassigned_lead)
   -- the implicit weights are moved with their script by reordering
   if self.reorder_moves then
-    first = tailoring_lib.move_primary(first, self.reorder_moves)
+    primary = tailoring_lib.move_primary(primary, self.reorder_moves)
   end
-  return {{first, 0x20, 0x02}, {second, 0, 0}}, pos + 1
+  return {{primary, root_info.common_secondary, root_info.common_tertiary}}, pos + 1
 end
 
 function collator:read_weight(codepoints, pos)
@@ -298,19 +278,25 @@ end
 
 -- the primary weight of U+FFFE, which separates the segments for backward
 -- levels (UTS #10, 10.1.5)
-local segment_separator = 0x0200
+local segment_separator = root_info.merge_separator
+-- the primary weights of the variable collation elements are above U+FFFE's
+-- and at most the variable top
+local variable_top = root_info.variable_top
+-- the quaternary weight of the non-ignorable collation elements, above every
+-- primary weight
+local max_quaternary = 0xFFFFFFFF
 
 -- variable weighting (UTS #10, section 4): collator_obj.variable_weighting is
 -- "non-ignorable" (the default), "shifted" or "blanked"
 -- the weights of the variable collation elements and of the ignorable ones
 -- after them are reset to zero; shifted adds a quaternary level, with the
--- old primary weight of the variable collation elements, FFFF for the
+-- old primary weight of the variable collation elements, FFFFFFFF for the
 -- other non-ignorable ones
 local function variable_weights(weights, levels, shifted, after_variable)
   local new = {}
   for i, element in ipairs(weights) do
     local reset, quaternary
-    if element.type == "*" and element[1] ~= 0 then
+    if element[1] > segment_separator and element[1] <= variable_top then
       -- variable collation element
       reset, quaternary, after_variable = true, element[1], true
     elseif element[1] == 0 then
@@ -322,10 +308,10 @@ local function variable_weights(weights, levels, shifted, after_variable)
         for level = 2, levels do
           if element[level] ~= 0 then completely_ignorable = false end
         end
-        reset, quaternary = false, completely_ignorable and 0 or 0xFFFF
+        reset, quaternary = false, completely_ignorable and 0 or max_quaternary
       end
     else
-      reset, quaternary, after_variable = false, 0xFFFF, false
+      reset, quaternary, after_variable = false, max_quaternary, false
     end
     local changed = {}
     for level = 1, levels do
@@ -529,21 +515,19 @@ end
 
 -- sort uppercase first
 function collator:uppercase_first()
-  -- table with values for uppercase
-  local uppercase_values = {0x08, 0x09, 0xA, 0xB, 0x0C, 0x0E, 0x11, 0x12, 0x1D}
-  local is_uppercase = {}
+  -- the case of a collation element is in its case field (the top bits of the
+  -- tertiary weight in FractionalUCA.txt): 0 lowercase or uncased, 1 mixed,
+  -- 2 uppercase; uppercase sorts first
+  local case_values = {[0] = 3, [1] = 2, [2] = 1}
   -- we must invert tertiary element in tailoring
   self.tailoring_multiplier[3] = -1
   self.is_uppercase_first = true
-  for k,v in ipairs(uppercase_values) do is_uppercase[v] = true end
 
   local function change_case(element)
     local value =  element.value or {}
     for _, collation_element in ipairs(value) do
-      -- detect if the tertiary element is uppercase
-      local third = collation_element[3]
       -- make new collation element and insert it before the tertiary element
-      local case = is_uppercase[third] and 1 or 3
+      local case = case_values[collation_element.case or 0]
       table.insert(collation_element, 3, case)
     end
     -- recursivelly process children
@@ -557,6 +541,5 @@ function collator:uppercase_first()
   end
 
 end
-
 
 return collator

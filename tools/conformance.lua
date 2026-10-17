@@ -1,7 +1,8 @@
 -- run the UCA conformance tests (UTS #10, section 12.2)
 -- texlua tools/conformance.lua [file ...]
--- the default files are data/CollationTest/CollationTest_*.txt; the
--- files with SHIFTED in their names are run with shifted variable weighting
+-- the default files are CLDR's tests of its root collation and the UCA's
+-- non-ignorable tests (same order), in data/CollationTest; the files with
+-- SHIFTED in their names are run with shifted variable weighting
 -- each line must be greater than or equal to the previous one, compared
 -- with the identical level
 kpse.set_program_name "luatex"
@@ -17,7 +18,8 @@ local collator = require "lua-uca.lua-uca-collator"
 local files = {}
 for i = 1, #arg do files[i] = arg[i] end
 if #files == 0 then
-  for _, name in ipairs {"NON_IGNORABLE_SHORT", "NON_IGNORABLE", "SHIFTED_SHORT", "SHIFTED"} do
+  for _, name in ipairs {"CLDR_NON_IGNORABLE_SHORT", "CLDR_NON_IGNORABLE", "CLDR_SHIFTED_SHORT", "CLDR_SHIFTED",
+    "NON_IGNORABLE_SHORT", "NON_IGNORABLE"} do
     files[#files + 1] = "data/CollationTest/CollationTest_" .. name .. ".txt"
   end
 end
