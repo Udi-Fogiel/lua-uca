@@ -22,11 +22,11 @@ local function binary_range_search(code_point, ranges)
   return nil, mid
 end
 
--- find the group of a script name or alias (ISO 15924 code etc.), in any case
-local function find_group(what, blocks)
-  local name = what:lower()
+-- find the group of a script name or alias (ISO 15924 code etc.), in any case;
+-- the unassigned code points cannot be listed, they move with "others"
+local function find_group(name, blocks)
   for i, v in ipairs(blocks) do
-    if v.name == name then return i end
+    if v.name == name and name ~= "unassigned" then return i end
     for _, alias in ipairs(v.aliases or {}) do
       if alias == name then return i end
     end
@@ -46,12 +46,23 @@ local special = {space = true, punct = true, symbol = true, currency = true, dig
 -- listed stay at the start
 local function reorder(what, blocks)
   blocks.order = blocks.order or {}
-  if others[what:lower()] then
+  -- names are matched in any case, with spaces for _ (ICU's loose matching)
+  local name = what:lower():gsub("_", " ")
+  if others[name] then
+    if blocks.has_others then error("lua-uca: others (Zzzz) twice in a reordering", 0) end
+    blocks.has_others = true
     table.insert(blocks.order, "others")
     return blocks
   end
-  local index = find_group(what, blocks)
-  if not index then return nil, "Cannot find block for reordering" end
+  local index = find_group(name, blocks)
+  if not index then
+    -- a script without characters in the root (Zyyy, Zinh, ...)
+    if blocks.unused and blocks.unused[name] then return blocks end
+    error("lua-uca: unknown script or reorder code " .. what, 0)
+  end
+  for _, item in ipairs(blocks.order) do
+    if item == index then error("lua-uca: duplicate or equivalent script in a reordering: " .. what, 0) end
+  end
   table.insert(blocks.order, index)
   return blocks
 end

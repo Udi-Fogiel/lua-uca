@@ -259,6 +259,8 @@ if mode == "info" then
     variable_tops = variable_tops,
     merge_separator = merge_separator,
     unassigned_lead = unassigned_lead,
+    -- the lead byte of the numeric primaries (FDD0 0034)
+    numeric_primary = mappings[string.format("%d %d", 0xFDD0, 0x34)].value[1][1],
     common_secondary = 0x0500,
     common_tertiary = 0x0500,
     han_ranges = han_ranges,

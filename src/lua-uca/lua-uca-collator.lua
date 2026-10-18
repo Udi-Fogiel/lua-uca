@@ -1,5 +1,6 @@
 -- object for Unicode string collation
 local math = require "math"
+local floor = math.floor
 local tailoring_lib
 local reordering_table
 local implicit
@@ -7,6 +8,7 @@ local rules_lib
 local builder
 local root_info
 local ccc
+local digits
 local uni_normalize
 if kpse then
   tailoring_lib = require "lua-uca.lua-uca-tailoring"
@@ -16,6 +18,7 @@ if kpse then
   builder = require "lua-uca.lua-uca-builder"
   root_info = require "lua-uca.lua-uca-root-info"
   ccc = require "lua-uca.lua-uca-ccc"
+  digits = require "lua-uca.lua-uca-digits"
   -- in LuaTeX, load the lua-uni-normalize library (it needs Lua 5.3, it
   -- cannot be loaded in LuaJITTeX)
   local ok, library = pcall(require, "lua-uni-normalize")
@@ -28,6 +31,7 @@ else
   builder = require "lua-uca.builder"
   root_info = require "lua-uca.root-info"
   ccc = require "lua-uca.ccc"
+  digits = require "lua-uca.digits"
 end
 
 local utf8 = utf8
@@ -60,6 +64,8 @@ local options = {
   -- Unified_Ideograph ranges) or "radical-stroke"; only when the collator is
   -- created
   han_order = {implicit = true, ["radical-stroke"] = true},
+  -- sequences of decimal digits sorted by their numeric value (UTS #35)
+  numeric = "boolean",
 }
 
 local function set_option(self, name, value)
@@ -325,11 +331,124 @@ function collator:read_weight(codepoints, pos)
   return weights, new_pos + 1
 end
 
+-- the values of the decimal digits
+local digit_values = {}
+for _, zero in ipairs(digits) do
+  for value = 0, 9 do digit_values[zero + value] = value end
+end
+
+-- the value of a digit for numeric collation: a decimal digit with a single
+-- collation element, without contractions or contexts (ICU's DIGIT_TAG)
+local function digit_value(self, codepoint)
+  local value = digit_values[codepoint]
+  if not value then return nil end
+  local entry = self.codes[codepoint]
+  if entry and (entry.children or entry.prefixes or not entry.value or #entry.value ~= 1) then
+    return nil
+  end
+  return value
+end
+
+-- the collation elements of a number, as ICU's appendNumericSegmentCEs: the
+-- numeric lead byte, then the value in the second byte and the next ones
+-- (small numbers), or the number of digit pairs and the pairs; length is at
+-- most 254 digits
+local function numeric_segment(list, digits, first, length)
+  local numeric_primary = root_info.numeric_primary
+  local function add(primary)
+    list[#list + 1] = {primary, root_info.common_secondary, root_info.common_tertiary}
+  end
+  if length <= 7 then
+    local value = 0
+    for i = first, first + length - 1 do value = value * 10 + digits[i] end
+    -- 74 second bytes (2..75) for 0..73 in two bytes
+    if value < 74 then
+      return add(numeric_primary + (2 + value) * 0x10000)
+    end
+    -- 40 second bytes (76..115) for 74..10233 in three bytes
+    value = value - 74
+    if value < 40 * 254 then
+      return add(numeric_primary + (76 + floor(value / 254)) * 0x10000 + (2 + value % 254) * 0x100)
+    end
+    -- 16 second bytes (116..131) for 10234..1042489 in four bytes
+    value = value - 40 * 254
+    if value < 16 * 254 * 254 then
+      local primary = numeric_primary + 2 + value % 254
+      value = floor(value / 254)
+      primary = primary + (2 + value % 254) * 0x100
+      value = floor(value / 254)
+      return add(primary + (116 + value % 254) * 0x10000)
+    end
+  end
+  -- the second bytes 132..255: the number of digit pairs (4..127), then
+  -- the pairs (11 + 2 * pair) without the trailing 00 pairs, the last one
+  -- less one
+  local pairs_count = floor((length + 1) / 2)
+  local primary = numeric_primary + (132 - 4 + pairs_count) * 0x10000
+  local last = first + length - 1
+  while digits[last] == 0 and digits[last - 1] == 0 do last = last - 2 end
+  local pair, pos
+  if (last - first + 1) % 2 == 1 then
+    pair, pos = digits[first], first + 1
+  else
+    pair, pos = digits[first] * 10 + digits[first + 1], first + 2
+  end
+  pair = 11 + 2 * pair
+  local shift = 0x100
+  while pos <= last do
+    if shift == 1 then
+      -- every three pairs a new collation element, with the numeric lead byte
+      add(primary + pair)
+      primary = numeric_primary
+      shift = 0x10000
+    else
+      primary = primary + pair * shift
+      shift = floor(shift / 0x100)
+    end
+    pair = 11 + 2 * (digits[pos] * 10 + digits[pos + 1])
+    pos = pos + 2
+  end
+  add(primary + (pair - 1) * shift)
+end
+
+-- the collation elements of the digits from pos, as ICU's appendNumericCEs:
+-- without the leading zeros, in segments of at most 254 digits
+local function numeric_weights(self, codepoints, pos)
+  local values = {}
+  local next_pos = pos
+  while true do
+    local value = codepoints[next_pos] and digit_value(self, codepoints[next_pos])
+    if not value then break end
+    values[#values + 1] = value
+    next_pos = next_pos + 1
+  end
+  local list = {}
+  local start = 1
+  repeat
+    while start < #values and values[start] == 0 do start = start + 1 end
+    local length = math.min(#values - start + 1, 254)
+    numeric_segment(list, values, start, length)
+    start = start + length
+  until start > #values
+  -- the numeric weights are moved with the digits by reordering
+  if self.reorder_moves then
+    for _, element in ipairs(list) do
+      element[1] = tailoring_lib.move_primary(element[1], self.reorder_moves)
+    end
+  end
+  return list, next_pos
+end
+
 -- get weights for the next characters
 -- when a discontiguous contraction was matched, the codepoints without the
 -- removed characters are returned as the third value
 function collator:get_weights(codepoints, pos)
   if rawget(self, "pending_rules") then self:apply_rules() end
+  if self.settings.numeric and digit_value(self, codepoints[pos]) then
+    local weights, next_pos = numeric_weights(self, codepoints, pos)
+    if next_pos > #codepoints then next_pos = nil end
+    return weights, next_pos
+  end
   local weights, next_pos, remaining = self:read_weight(codepoints, pos)
   -- return implicit weights for codepoints that are not in the database
   if not weights then
@@ -794,9 +913,7 @@ local rule_settings = {
   maxVariable = function(self, value) self:set {max_variable = value} end,
   -- the input is always normalized when it can be
   normalization = function() end,
-  numericOrdering = function(self, value)
-    if value then error("lua-uca: [numericOrdering on] is not supported", 0) end
-  end,
+  numericOrdering = function(self, value) self:set {numeric = value} end,
   hiraganaQ = function() end,
   import = function(self, value) error("lua-uca: [import " .. value .. "] is not supported", 0) end,
   -- only makes the tables smaller in ICU
@@ -895,14 +1012,15 @@ end
 -- pass table with script names to reorder
 function collator:reorder(tbl)
   if rawget(self, "pending_rules") then self:apply_rules() end
-  -- kept, to be applied again when new rules are built
-  rawset(self, "reorder_codes", tbl)
-  -- make table of the reordering table
+  -- make table of the reordering table (an error in the codes leaves the
+  -- collator unchanged)
   local t = copy_table(reordering_table)
   for _, script in ipairs(tbl) do
     -- reorder scripts
     tailoring_lib.reorder(script, t)
   end
+  -- kept, to be applied again when new rules are built
+  rawset(self, "reorder_codes", tbl)
   -- apply reordering to the collator object
   tailoring_lib.reorder_collator(self, t)
 end

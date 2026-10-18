@@ -86,9 +86,11 @@ end
 -- scriptStarts); the reserved ranges and the unassigned code points have no
 -- name
 local boundaries = {}
-local version
+local version, unassigned_start, first_trail_byte
 for line in io.lines("data/FractionalUCA.txt") do
   version = version or line:match("^%[UCA version = ([%d%.]+)%]")
+  local trail = line:match("^%[fixed first trail byte (%x%x)%]")
+  if trail then first_trail_byte = tonumber(trail, 16) end
   local mark, codepoint, primary = line:match("^(FDD[01]) (%x+);%s*%[([%x ]*),")
   if mark then
     codepoint = tonumber(codepoint, 16)
@@ -102,6 +104,7 @@ for line in io.lines("data/FractionalUCA.txt") do
     if mark == "FDD1" and codepoint == 0xFDD0 then
       -- unassigned first primary: the end of the last group
       boundaries[#boundaries + 1] = {start = start, first = first}
+      unassigned_start = start
     elseif mark == "FDD1" then
       local name = special_group(categories[codepoint]) or scripts[codepoint]
       if not name then error(string.format("no script for U+%04X", codepoint)) end
@@ -135,6 +138,26 @@ for i, boundary in ipairs(boundaries) do
       local nextboundary = assert(boundaries[j], "no boundary after " .. name)
       groups[#groups + 1] = {min = boundary.start, max = nextboundary.start - 1, name = name, aliases = list}
     end
+  end
+end
+
+-- the unassigned code points: ICU's Zzzz range (FDD1 FDD0), up to the
+-- trailing weights; moved with "others", it cannot be listed
+groups[#groups + 1] = {min = unassigned_start, max = first_trail_byte * 0x1000000 - 1, name = "unassigned", aliases = {}}
+
+-- the names of scripts without characters in the root collation (Zyyy,
+-- Zinh, ...), ignored in a reordering as in ICU; other names are errors
+local used = {}
+for _, group in ipairs(groups) do
+  used[group.name] = true
+  for _, alias in ipairs(group.aliases) do used[alias] = true end
+end
+groups.unused = {}
+for name, code in pairs(codes) do
+  local long = name:lower():gsub("_", " ")
+  if not used[long] and not used[code:lower()] then
+    groups.unused[long] = true
+    groups.unused[code:lower()] = true
   end
 end
 

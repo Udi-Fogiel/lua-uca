@@ -35,6 +35,7 @@ local attributes = {
   caseFirst = function(c, v) c:set {case_first = v} end,
   caseLevel = function(c, v) c:set {case_level = v == "on"} end,
   maxVariable = function(c, v) c:set {max_variable = v} end,
+  numeric = function(c, v) c:set {numeric = v == "on"} end,
   normalization = function() end,
 }
 

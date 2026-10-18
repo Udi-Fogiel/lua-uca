@@ -152,6 +152,10 @@ points. The `han_order` option set to `"radical-stroke"` sorts them by radical
 and number of strokes instead (the order of CLDR's radical-stroke data, used
 by its "unihan" collations). It can only be given to `collator.new`.
 
+The `numeric` option set to `true` sorts sequences of decimal digits by
+their numeric value, so that "a2" comes before "a10"; leading zeros are
+ignored. The rule setting `[numericOrdering on]` does the same.
+
 Strings that differ only in ignorable characters, or only in variable
 characters with `"blanked"`, are equal for the collator. Set the
 `identical_level` option to `true` to order them by their code points (in
@@ -186,7 +190,9 @@ Scripts are given by their English names in lowercase, such as "cyrillic",
 "Hani". Hiragana and Katakana are one script ("kana"). The characters before
 the letters form the groups "space", "punct", "symbol", "currency" and
 "digits" (or "digit"); those that are not listed stay before the others.
-The groups are those of CLDR.
+The groups are those of CLDR. Characters that are not assigned in Unicode
+are sorted with "others". Unknown names, and a script listed twice (also
+under another name, such as "hira" and "kana"), are errors.
 
 ## Headers for index entries
 

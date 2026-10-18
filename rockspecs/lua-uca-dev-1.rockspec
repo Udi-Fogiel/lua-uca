@@ -28,6 +28,7 @@ build = {
       ["lua-uca.reordering-table"] = "src/lua-uca/lua-uca-reordering-table.lua",
       ["lua-uca.implicit"] = "src/lua-uca/lua-uca-implicit.lua",
       ["lua-uca.ccc"] = "src/lua-uca/lua-uca-ccc.lua",
+      ["lua-uca.digits"] = "src/lua-uca/lua-uca-digits.lua",
       ["lua-uca.tailoring"] = "src/lua-uca/lua-uca-tailoring.lua",
       ["lua-uca.rules"] = "src/lua-uca/lua-uca-rules.lua",
       ["lua-uca.builder"] = "src/lua-uca/lua-uca-builder.lua"

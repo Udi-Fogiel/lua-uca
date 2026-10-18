@@ -16,7 +16,7 @@ ifeq ($(strip $(shell git rev-parse --is-inside-work-tree 2>/dev/null)),true)
 endif
 
 
-all: data/common src/lua-uca/lua-uca-root.lua src/lua-uca/lua-uca-root-info.lua src/lua-uca/lua-uca-han-radical.lua src/lua-uca/lua-uca-root-jit.lua src/lua-uca/lua-uca-reordering-table.lua src/lua-uca/lua-uca-ccc.lua src/lua-uca/lua-uca-chinese.lua $(DOC_PDF)
+all: data/common src/lua-uca/lua-uca-root.lua src/lua-uca/lua-uca-root-info.lua src/lua-uca/lua-uca-han-radical.lua src/lua-uca/lua-uca-root-jit.lua src/lua-uca/lua-uca-reordering-table.lua src/lua-uca/lua-uca-ccc.lua src/lua-uca/lua-uca-digits.lua src/lua-uca/lua-uca-chinese.lua $(DOC_PDF)
 
 UCA_URL = https://www.unicode.org/Public/UCA/latest
 UCD_URL = https://www.unicode.org/Public/UCD/latest/ucd
@@ -81,6 +81,10 @@ src/lua-uca/lua-uca-reordering-table.lua: data/FractionalUCA.txt data/Scripts.tx
 src/lua-uca/lua-uca-ccc.lua: data/UnicodeData.txt
 	mkdir -p src/lua-uca
 	texlua tools/make_ccc.lua > $@
+
+src/lua-uca/lua-uca-digits.lua: data/UnicodeData.txt
+	mkdir -p src/lua-uca
+	texlua tools/make_digits.lua > $@
 
 .PHONY: test install conformance fetch
 

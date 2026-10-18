@@ -177,6 +177,17 @@ describe("collator test suite",function()
     local c = collator.new(ducet)
     assert.falsy(pcall(function() c:set {han_order = "radical-stroke"} end))
   end)
+  it("numeric collation should work", function()
+    local c = collator.new(ducet, {numeric = true})
+    local t = {"a10", "a2", "a1000000000", "a01", "a١٥", "a9"}
+    table.sort(t, function(a, b) return c:compare_strings(a, b) end)
+    assert.same({"a01", "a2", "a9", "a10", "a١٥", "a1000000000"}, t)
+    -- leading zeros are ignored, up to the identical level
+    assert.same(c:make_sort_key(c:string_to_codepoints("1")), c:make_sort_key(c:string_to_codepoints("001")))
+    local d = collator.new(ducet)
+    d:tailor_string "[numericOrdering on]"
+    assert.truthy(d:compare_strings("2", "10"))
+  end)
   it("should make sort keys", function()
     local codepoints = {0x0FB2, 0x0F80, string.byte("a")}
     local sort_key = collator_obj:make_sort_key(codepoints)

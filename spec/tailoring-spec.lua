@@ -79,4 +79,23 @@ describe("Test reordering", function()
     -- CLDR's code for digits
     assert.same({"!", "♥", "€", "a", "1"}, sorted {"others", "digit"})
   end)
+  it("should move the unassigned code points with others", function()
+    local c = collator_lib.new(ducet)
+    local unassigned = utf8.char(0x50000)
+    c:reorder {"latn"}
+    assert.truthy(c:compare_strings("a", unassigned))
+    c:reorder {"others", "latn"}
+    assert.truthy(c:compare_strings(unassigned, "a"))
+    assert.truthy(c:compare_strings("漢", unassigned))
+  end)
+  it("should reject wrong reorder codes", function()
+    local c = collator_lib.new(ducet)
+    assert.falsy(pcall(c.reorder, c, {"latn", "Latin"}))
+    -- Hiragana and Katakana are one group
+    assert.falsy(pcall(c.reorder, c, {"hira", "kana"}))
+    assert.falsy(pcall(c.reorder, c, {"others", "zzzz"}))
+    assert.falsy(pcall(c.reorder, c, {"nonsense"}))
+    -- scripts without characters in the root are ignored
+    assert.truthy(pcall(c.reorder, c, {"zyyy", "latn"}))
+  end)
 end)
