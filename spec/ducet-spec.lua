@@ -38,9 +38,9 @@ describe("Collation test", function()
     assert.truthy(a < b)
   end)
   it("contracted characters", function()
-    -- test for existence of sequence 0x006C 0x00B7
-    local l = keys[0x006C] --
-    assert.truthy(l.children[0x00B7])
+    -- the middle dot after l has its own mapping, a prefix context (l|·)
+    local dot = keys[0x00B7]
+    assert.truthy(dot.prefixes[0x006C].entry.value)
   end)
   it("supports contractions of  more than two letters", function()
      local x = keys[0x0FB2] 

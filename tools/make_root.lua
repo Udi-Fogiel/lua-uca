@@ -283,20 +283,26 @@ for _, entry in ipairs(order) do
       value = {{unassigned_lead * 0x1000000 + 0x040200, 0x0500, 0x0500}}
     end
     if entry.prefix then
-      -- a prefix mapping p|x is the contraction px: CE(p) followed by the
-      -- collation elements of x after p
-      local key, new = {}, {}
-      for _, codepoint in ipairs(entry.prefix) do
-        key[#key + 1] = codepoint
-        for _, ce in ipairs(resolve(mappings[tostring(codepoint)].value)) do new[#new + 1] = ce end
+      -- a prefix mapping p|x: the mapping of x after p, in the prefixes of
+      -- x (the preceding code points in reverse)
+      local x = root.keys[entry.key[1]]
+      if not x then
+        x = {}
+        root.keys[entry.key[1]] = x
       end
-      for _, codepoint in ipairs(entry.key) do key[#key + 1] = codepoint end
-      for _, ce in ipairs(value) do new[#new + 1] = ce end
-      root:update_keys(key, new)
-      -- marked, for [suppressContractions] of the character after the prefix
-      local node = root.keys[key[1]]
-      for i = 2, #key do node = node.children[key[i]] end
-      node.prefix = true
+      x.prefixes = x.prefixes or {}
+      local map, node = x.prefixes
+      for i = #entry.prefix, 1, -1 do
+        local c = entry.prefix[i]
+        node = map[c] or {}
+        map[c] = node
+        if i > 1 then
+          node.more = node.more or {}
+          map = node.more
+        end
+      end
+      assert(#entry.key == 1, "prefix mapping with a contraction")
+      node.entry = {value = value}
     else
       root:update_keys(entry.key, value)
     end

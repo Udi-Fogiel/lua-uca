@@ -269,7 +269,7 @@ local function upper_bound(list, w)
   return low
 end
 
-local function new_root_elements(root_codes, root_info, implicit, han_ranges)
+local function new_root_elements(root_codes, root_info, implicit, han_ranges, walk_entries)
   local primaries, sec_ter, secondary_ces, tertiary_ces = {}, {}, {}, {}
   local function add(element)
     local p, s, t = element[1], element[2], element[3]
@@ -285,8 +285,9 @@ local function new_root_elements(root_codes, root_info, implicit, han_ranges)
     end
   end
   local function walk(entry)
-    for _, element in ipairs(entry.value or {}) do add(element) end
-    for _, child in pairs(entry.children or {}) do walk(child) end
+    walk_entries(entry, function(e)
+      for _, element in ipairs(e.value or {}) do add(element) end
+    end)
   end
   -- not U+FFFE, the merge separator (collationbasedatabuilder.cpp)
   for code, entry in pairs(root_codes) do
@@ -414,7 +415,7 @@ end
 
 -- shared by the collators of a root (and Han order)
 local root_elements_cache = setmetatable({}, {__mode = "k"})
-function M.root_elements(root_codes, root_info, implicit, han_ranges)
+function M.root_elements(root_codes, root_info, implicit, han_ranges, walk_entries)
   local cache = root_elements_cache[root_codes]
   if not cache then
     cache = setmetatable({}, {__mode = "k"})
@@ -422,7 +423,7 @@ function M.root_elements(root_codes, root_info, implicit, han_ranges)
   end
   local R = cache[han_ranges]
   if not R then
-    R = new_root_elements(root_codes, root_info, implicit, han_ranges)
+    R = new_root_elements(root_codes, root_info, implicit, han_ranges, walk_entries)
     cache[han_ranges] = R
   end
   return R
@@ -451,7 +452,7 @@ local function is_jamo_v(c) return c >= 0x1161 and c <= 0x1175 end
 
 function M.build(collator, items, deps)
   local implicit, root_info = deps.implicit, deps.root_info
-  local root = M.root_elements(collator.root_codes, root_info, implicit, deps.han_ranges)
+  local root = M.root_elements(collator.root_codes, root_info, implicit, deps.han_ranges, collator.walk_entries)
 
   -- nodes: weight (32 bits for primaries, 16 bits otherwise), strength,
   -- tailored, before2, before3, previous, next (indexes, 0 for none)
@@ -871,33 +872,22 @@ function M.build(collator, items, deps)
       -- relations
       get_ces(normalized(item.extension), value)
     end
-    local key = nfd_string
     if nfd_prefix then
-      -- a prefix mapping p|x as the contraction px: CE(p) followed by the
-      -- CEs of x after p
-      local prefix_ces = get_ces(nfd_prefix)
-      key = {}
-      for _, c in ipairs(nfd_prefix) do key[#key + 1] = c end
-      for _, c in ipairs(nfd_string) do key[#key + 1] = c end
-      for j = #prefix_ces, 1, -1 do table.insert(value, 1, prefix_ces[j]) end
+      collator:update_prefix(nfd_prefix, nfd_string, value)
+    else
+      collator:update_codes(nfd_string, value)
     end
-    collator:update_codes(key, value)
     for _, ce in ipairs(value) do written[#written + 1] = ce end
   end
 
+  -- the characters of the set get their mappings without context: no
+  -- contractions, no prefixes (CollationDataBuilder::suppressContractions)
   local function suppress_contractions(set)
     for code in pairs(set) do
       local entry = collator.codes[code]
-      if entry and entry.children then
-        for k, child in pairs(entry.children) do
-          if not child.prefix then entry.children[k] = nil end
-        end
-        if next(entry.children) == nil then entry.children = nil end
-      end
-    end
-    for _, entry in pairs(collator.codes) do
-      for k, child in pairs(entry.children or {}) do
-        if child.prefix and set[k] then entry.children[k] = nil end
+      if entry then
+        entry.children = nil
+        entry.prefixes = nil
       end
     end
   end

@@ -125,6 +125,23 @@ end
 
 collator.copy_table = copy_table
 
+-- call fn for an entry of the table and every entry below it: its
+-- contractions (children) and the entries of its prefix contexts
+-- (prefixes: a tree of the preceding code points, in reverse, whose nodes
+-- have an entry and the longer prefixes in more)
+local function walk_entries(entry, fn)
+  fn(entry)
+  for _, child in pairs(entry.children or {}) do walk_entries(child, fn) end
+  local function walk_prefixes(map)
+    for _, node in pairs(map) do
+      if node.entry then walk_entries(node.entry, fn) end
+      if node.more then walk_prefixes(node.more) end
+    end
+  end
+  if entry.prefixes then walk_prefixes(entry.prefixes) end
+end
+collator.walk_entries = walk_entries
+
 function collator.new(codes, settings)
   local self = setmetatable({settings = {}}, instance)
   -- tree with mappings from codepoints to collation elements
@@ -214,9 +231,8 @@ function collator:use_radical_stroke()
     for _, element in ipairs(entry.value or {}) do
       if element.han then element[1] = implicit.han_primary(element.han, ranges) end
     end
-    for _, child in pairs(entry.children or {}) do update(child) end
   end
-  for _, entry in pairs(self.codes) do update(entry) end
+  for _, entry in pairs(self.codes) do walk_entries(entry, update) end
 end
 
 function collator:get_implicit_weight(codepoints, pos)
@@ -232,9 +248,29 @@ function collator:get_implicit_weight(codepoints, pos)
   return {{primary, root_info.common_secondary, root_info.common_tertiary}}, pos + 1
 end
 
+-- the weights of the longest match at pos, as ICU's CollationIterator: the
+-- longest prefix context (the code points before pos), then its
+-- contractions; when none of a context's contractions matches and it has no
+-- mapping of its own, the next shorter context, and ultimately the mapping
+-- without context (ICU's CONTRACT_SINGLE_CP_NO_MATCH)
 function collator:read_weight(codepoints, pos)
-  -- try to find contractions and return weight for longest matched string
-  -- in the database
+  local codes = self.codes[codepoints[pos]]
+  if not codes then return nil, pos + 1 end
+  -- the entries of the matching contexts, from no context to the longest
+  local chain
+  local map = codes.prefixes
+  if map then
+    chain = {codes}
+    local k = pos - 1
+    while map and k >= 1 do
+      local node = map[codepoints[k]]
+      if not node then break end
+      if node.entry then chain[#chain + 1] = node.entry end
+      map = node.more
+      k = k - 1
+    end
+  end
+  -- the longest contraction from an entry
   local function read_children(parent, pos)
     local children = parent.children or {}
     local newpos = pos + 1
@@ -250,14 +286,13 @@ function collator:read_weight(codepoints, pos)
     return nil
   end
   local weights, new_pos, node
-  local current_codepoint = codepoints[pos]
-  local codes = self.codes[current_codepoint]
-  if not codes then return nil, pos + 1 end
-  -- first try to read contractions
-  weights, new_pos, node = read_children(codes, pos)
-  if not weights then
-    -- if no contraction, weights are in the value field
-    weights, new_pos, node = codes.value, pos, codes
+  for j = chain and #chain or 1, 1, -1 do
+    local entry = chain and chain[j] or codes
+    weights, new_pos, node = read_children(entry, pos)
+    if not weights and entry.value then
+      weights, new_pos, node = entry.value, pos, entry
+    end
+    if weights then break end
   end
   if not weights then return nil, pos + 1 end
   -- discontiguous contractions (UTS #10, S2.1.1-S2.1.3): an unblocked
@@ -617,6 +652,38 @@ function collator:compare_strings(a,b)
   local bsortkey = cache[b] or get_sortkey(b)
   cache[a], cache[b] = asortkey, bsortkey
   return self:compare(asortkey, bsortkey)
+end
+
+-- a mapping with a prefix context: key after prefix
+function collator:update_prefix(prefix, key, elements)
+  local first = key[1]
+  local entry = self.codes[first]
+  if not entry then
+    entry = {}
+    self.codes[first] = entry
+  end
+  entry.prefixes = entry.prefixes or {}
+  local map, node = entry.prefixes
+  for i = #prefix, 1, -1 do
+    node = map[prefix[i]]
+    if not node then
+      node = {}
+      map[prefix[i]] = node
+    end
+    if i > 1 then
+      node.more = node.more or {}
+      map = node.more
+    end
+  end
+  node.entry = node.entry or {}
+  local target = node.entry
+  for i = 2, #key do
+    target.children = target.children or {}
+    local child = target.children[key[i]] or {}
+    target.children[key[i]] = child
+    target = child
+  end
+  target.value = elements
 end
 
 -- update collation codes

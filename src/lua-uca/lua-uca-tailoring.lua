@@ -127,12 +127,9 @@ local function reorder_collator(collator, blocks)
   end
   local function update_weights(entry)
     if entry.value then update_value(entry.value) end
-    for _, child in pairs(entry.children or {}) do
-      update_weights(child)
-    end
   end
   for _, current in pairs(collator.codes) do
-    update_weights(current)
+    collator.walk_entries(current, update_weights)
   end
   collator.reorder_moves = moves
   -- the moves back, to find the weights before reordering
