@@ -177,6 +177,12 @@ describe("collator test suite",function()
     local c = collator.new(ducet)
     assert.falsy(pcall(function() c:set {han_order = "radical-stroke"} end))
   end)
+  it("Hangul syllables should get the weights of their jamo", function()
+    local c = collator.new(ducet)
+    -- also when the input is not in NFD
+    assert.same(c:make_sort_key {0x1100, 0x1161, 0x11A8}, c:make_sort_key {0xAC01})
+    assert.truthy(c:compare(c:make_sort_key {0xD55C}, c:make_sort_key {0x6F22}))
+  end)
   it("numeric collation should work", function()
     local c = collator.new(ducet, {numeric = true})
     local t = {"a10", "a2", "a1000000000", "a01", "a١٥", "a9"}

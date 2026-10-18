@@ -439,6 +439,22 @@ local function numeric_weights(self, codepoints, pos)
   return list, next_pos
 end
 
+-- the weights of a Hangul syllable: those of its leading consonant, vowel
+-- and trailing consonant (the Jamo have no contractions, the builder
+-- rejects them)
+local function hangul_weights(self, codepoint)
+  local index = codepoint - 0xAC00
+  if index < 0 or index > 11171 then return nil end
+  local jamo = {0x1100 + floor(index / 588), 0x1161 + floor(index % 588 / 28)}
+  if index % 28 ~= 0 then jamo[3] = 0x11A7 + index % 28 end
+  local weights = {}
+  for i = 1, #jamo do
+    local list = self:read_weight(jamo, i) or self:get_implicit_weight(jamo, i)
+    for _, element in ipairs(list) do weights[#weights + 1] = element end
+  end
+  return weights
+end
+
 -- get weights for the next characters
 -- when a discontiguous contraction was matched, the codepoints without the
 -- removed characters are returned as the third value
@@ -450,6 +466,12 @@ function collator:get_weights(codepoints, pos)
     return weights, next_pos
   end
   local weights, next_pos, remaining = self:read_weight(codepoints, pos)
+  -- Hangul syllables without a mapping of their own: the weights of their
+  -- jamo, also when the input is not in NFD (ICU's HANGUL_TAG)
+  if not weights then
+    weights = hangul_weights(self, codepoints[pos])
+    next_pos = pos + 1
+  end
   -- return implicit weights for codepoints that are not in the database
   if not weights then
     weights, next_pos = self:get_implicit_weight(codepoints, pos)

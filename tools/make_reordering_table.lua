@@ -54,7 +54,8 @@ local aliases = {
   digits = {"digit"},
   -- names from the earlier, block based, table
   Katakana = {"hrkt", "katakana or hiragana"},
-  Han = {"cjk"},
+  -- Hans and Hant are Han for ICU (genuca.cpp)
+  Han = {"hans", "hant", "cjk"},
   Meetei_Mayek = {"meetei"},
   Syloti_Nagri = {"syloti"},
   Tai_Le = {"taile"},

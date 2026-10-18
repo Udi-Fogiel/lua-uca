@@ -97,5 +97,7 @@ describe("Test reordering", function()
     assert.falsy(pcall(c.reorder, c, {"nonsense"}))
     -- scripts without characters in the root are ignored
     assert.truthy(pcall(c.reorder, c, {"zyyy", "latn"}))
+    -- ICU's codes for Han
+    assert.truthy(pcall(c.reorder, c, {"hans"}))
   end)
 end)
