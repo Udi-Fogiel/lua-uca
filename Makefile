@@ -16,7 +16,7 @@ ifeq ($(strip $(shell git rev-parse --is-inside-work-tree 2>/dev/null)),true)
 endif
 
 
-all: data/common src/lua-uca/lua-uca-root.lua src/lua-uca/lua-uca-root-info.lua src/lua-uca/lua-uca-han-radical.lua src/lua-uca/lua-uca-root-jit.lua src/lua-uca/lua-uca-reordering-table.lua src/lua-uca/lua-uca-ccc.lua src/lua-uca/lua-uca-digits.lua src/lua-uca/lua-uca-chinese.lua $(DOC_PDF)
+all: src/lua-uca/lua-uca-root.lua src/lua-uca/lua-uca-root-info.lua src/lua-uca/lua-uca-han-radical.lua src/lua-uca/lua-uca-root-jit.lua src/lua-uca/lua-uca-reordering-table.lua src/lua-uca/lua-uca-ccc.lua src/lua-uca/lua-uca-digits.lua src/lua-uca/lua-uca-collations.lua $(DOC_PDF)
 
 UCA_URL = https://www.unicode.org/Public/UCA/latest
 UCD_URL = https://www.unicode.org/Public/UCD/latest/ucd
@@ -48,16 +48,29 @@ data/CollationTest:
 	  $(WGET) -O $@/CollationTest_CLDR_$$test.txt $(CLDR_URL)/CollationTest_CLDR_$$test.txt || exit 1; \
 	done
 
-# download all the Unicode data again, for a new Unicode version
+# download all the Unicode and CLDR data again, for a new version
 fetch:
-	rm -f data/allkeys.txt data/FractionalUCA.txt data/UnicodeData.txt data/Scripts.txt data/PropertyValueAliases.txt
-	rm -rf data/CollationTest
-	$(MAKE) data/allkeys.txt data/FractionalUCA.txt data/UnicodeData.txt data/Scripts.txt data/PropertyValueAliases.txt data/CollationTest
+	rm -f data/allkeys.txt data/FractionalUCA.txt data/UnicodeData.txt data/Scripts.txt data/PropertyValueAliases.txt data/supplementalData.xml data/likelySubtags.xml
+	rm -rf data/CollationTest data/collation
+	$(MAKE) data/allkeys.txt data/FractionalUCA.txt data/UnicodeData.txt data/Scripts.txt data/PropertyValueAliases.txt data/CollationTest data/collation data/supplementalData.xml data/likelySubtags.xml
 
-data/common:
-	wget http://unicode.org/Public/cldr/33/cldr-common-33.0.zip
-	unzip cldr-common-33.0.zip "common/collation/*" -d data/
-	rm cldr-common-33.0.zip
+# the collation rules of the locales (all the files of common/collation),
+# the parent locales and the likely subtags, from CLDR's development version
+CLDR_COMMON = https://raw.githubusercontent.com/unicode-org/cldr/main/common
+CLDR_LIST = https://api.github.com/repos/unicode-org/cldr/contents/common/collation?ref=main
+data/collation:
+	mkdir -p $@.tmp
+	$(WGET) -O $@.tmp/list.json "$(CLDR_LIST)"
+	for file in $$(grep -o '"name": "[^"]*\.xml"' $@.tmp/list.json | sed 's/"name": "//; s/"//'); do \
+	  $(WGET) -O $@.tmp/$$file $(CLDR_COMMON)/collation/$$file || exit 1; \
+	done
+	rm $@.tmp/list.json
+	rm -rf $@
+	mv $@.tmp $@
+
+data/supplementalData.xml data/likelySubtags.xml:
+	mkdir -p data
+	$(WGET) -O $@.tmp $(CLDR_COMMON)/supplemental/$(notdir $@) && mv $@.tmp $@
 
 src/lua-uca/lua-uca-root.lua: data/FractionalUCA.txt
 	mkdir -p src/lua-uca
@@ -85,6 +98,10 @@ src/lua-uca/lua-uca-ccc.lua: data/UnicodeData.txt
 src/lua-uca/lua-uca-digits.lua: data/UnicodeData.txt
 	mkdir -p src/lua-uca
 	texlua tools/make_digits.lua > $@
+
+src/lua-uca/lua-uca-collations.lua: data/collation data/supplementalData.xml data/likelySubtags.xml
+	mkdir -p src/lua-uca
+	texlua tools/make_collations.lua > $@
 
 .PHONY: test install conformance fetch
 

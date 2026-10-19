@@ -45,6 +45,33 @@ The output:
 > chochol
 > jasan
 
+### Locales
+
+The `locale` option gives a collator the rules of a locale from the Unicode
+Common Locale Data Repository (CLDR), as in ICU. The locale is a BCP 47
+language tag:
+
+    local collator_obj = collator.new(root, {locale = "cs"})
+
+A locale without rules of its own uses those of its parent (`de-CH` those of
+`de`), and the root collation is that of the locales that need no rules
+(`en`, `pt`). `zh-TW` is `zh-Hant`. Some locales
+have several collation types, selected with `-u-co-`: `de-u-co-phonebk`
+(German phone books, ä as ae), `es-u-co-trad` (traditional Spanish), `zh`
+(pinyin, the default), `zh-u-co-stroke`, `zh-u-co-zhuyin`. The other `-u-`
+keys set options: `-u-kn` sorts numbers by their value, `-u-ka-shifted`
+ignores spaces and punctuation, `-u-kf-upper` sorts uppercase first, `-u-kr-`
+reorders scripts, as in `-u-kr-grek-latn`. Options given with `locale` come
+after them:
+
+    collator.new(root, {locale = "en-u-kn", strength = 2})
+
+The `locale` option can only be given to `collator.new`.
+
+The `lua-uca-languages` module of the example above remains for older
+documents. Its rules are written by hand from an older CLDR version, and some
+of them are not CLDR's.
+
 More samples of the library usage can be found in the source repository of this package on [Github](https://github.com/michal-h21/lua-uca).
 % See `HACKING.md` file in the repo for more information.
 
@@ -74,6 +101,7 @@ The simplest way to change the default sorting order is to use the
 special syntax which is subset of the format used by the [Unicode locale data
 markup
 language](https://www.unicode.org/reports/tr35/tr35-collation.html#Orderings).
+`[import cs]` adds the rules of a locale (with a type: `[import de-u-co-phonebk]`).
 
     collator_obj:tailor_string "&a<b"
 

@@ -194,6 +194,35 @@ describe("collator test suite",function()
     d:tailor_string "[numericOrdering on]"
     assert.truthy(d:compare_strings("2", "10"))
   end)
+  it("the locale option should use CLDR's rules", function()
+    local sorted = function(options, words)
+      local c = collator.new(ducet, options)
+      table.sort(words, function(a, b) return c:compare_strings(a, b) end)
+      return words
+    end
+    assert.same({"cukr", "čaj", "hrad", "chata"}, sorted({locale = "cs"}, {"chata", "hrad", "cukr", "čaj"}))
+    -- a collation type, and the type of a parent locale (de-CH from de)
+    assert.same({"Mueller", "Müller", "Muffe"}, sorted({locale = "de-CH-u-co-phonebk"}, {"Muffe", "Müller", "Mueller"}))
+    assert.same({"Mueller", "Muffe", "Müller"}, sorted({locale = "de"}, {"Muffe", "Müller", "Mueller"}))
+    -- the -u- keys, and the options given with it after them
+    assert.same({"a1", "a2", "a10"}, sorted({locale = "en-u-kn"}, {"a10", "a2", "a1"}))
+    assert.same({"a1", "a10", "a2"}, sorted({locale = "en-u-kn", numeric = false}, {"a10", "a2", "a1"}))
+    -- zh imports its pinyin rules; zh-TW is zh-Hant, sorted by strokes
+    assert.same({"啊", "国", "人", "中"}, sorted({locale = "zh"}, {"中", "国", "人", "啊"}))
+    assert.same({"人", "中", "国", "啊"}, sorted({locale = "zh-TW"}, {"中", "国", "人", "啊"}))
+    assert.falsy(pcall(collator.new, ducet, {locale = 1}))
+    local c = collator.new(ducet, {locale = "cs"})
+    assert.falsy(pcall(function() c.locale = "de" end))
+  end)
+  it("should import rules", function()
+    local c = collator.new(ducet)
+    c:tailor_string "[import cs]&z<æ"
+    assert.truthy(c:compare_strings("hrad", "chata"))
+    assert.truthy(c:compare_strings("z", "æ"))
+    -- as ICU: the given type, or standard, and an error without it
+    local d = collator.new(ducet)
+    assert.falsy(pcall(function() d:tailor_string "[import de-u-co-nonsense]" end))
+  end)
   it("should make sort keys", function()
     local codepoints = {0x0FB2, 0x0F80, string.byte("a")}
     local sort_key = collator_obj:make_sort_key(codepoints)

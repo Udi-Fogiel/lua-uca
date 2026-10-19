@@ -11,6 +11,7 @@ table.insert(package.searchers, 2, function(name)
 end)
 local root = require "lua-uca.lua-uca-root"
 local collator = require "lua-uca.lua-uca-collator"
+local locales = require "lua-uca.lua-uca-locales"
 -- ICU's default strength is tertiary (lua-uca's default compares the
 -- quaternary level with shifted variable weighting)
 local function new_collator() return collator.new(root, {strength = 3}) end
@@ -82,8 +83,27 @@ while i <= #lines do
   elseif line:match("^@ root") then
     c, skip = new_collator(), nil
   elseif line:match("^@ locale") then
-    c = nil
-    skip_block("@ locale")
+    local tag = line:match("^@ locale%s+(%S+)")
+    -- ICU's locale IDs (fr@colStrength=...) are not language tags
+    local rules = not tag:match("@") and locales.rules(tag)
+    c, skip = nil, nil
+    if rules then
+      c = new_collator()
+      local ok, err = pcall(function()
+        c:tailor_string(rules)
+        c:apply_rules()
+        -- the -u- keys after the rules, as ICU
+        local options, reorder = locales.options(tag)
+        c:set(options)
+        if reorder then c:reorder(reorder) end
+      end)
+      if not ok then
+        c = nil
+        skip_block(tostring(err):gsub("^.-lua%-uca: ", ""):gsub("%(.*", ""))
+      end
+    else
+      skip_block("@ locale with an ICU locale ID")
+    end
   elseif line:match("^@ rules") then
     local text = {}
     while lines[i] and not lines[i]:match("^[%*@%%]") do

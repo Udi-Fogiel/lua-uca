@@ -31,7 +31,13 @@ To install the package in the local TEXMF tree, run:
 
 ## New language support
 
-To add a new language, add new function to `src/lua-uca/lua-uca-languages.lua`
+The rules of all of CLDR's locales are in `src/lua-uca/lua-uca-collations.lua`,
+made by `tools/make_collations.lua` from CLDR's `common/collation` files
+(`make data/collation`, also downloaded by `make fetch`), and used by the
+`locale` option and `[import]`. A new locale comes with a new version of
+CLDR's data.
+
+The `lua-uca-languages` module has older, hand-written rules. To add a new language to it, add new function to `src/lua-uca/lua-uca-languages.lua`
 file. The function name should be short language code. Example function for
 the Russian language:
 
@@ -43,7 +49,7 @@ the Russian language:
 The language function takes the Collator object as a parameter. Methods showed
 in the *Change sorting rules* section can be used with this object.
 
-The `data/common/collation/` directory in the source repository contains files from the `CLDR` project.
+The `data/collation/` directory in the source repository contains files from the `CLDR` project.
 They contain rules for many languages. The files needs to be normalized to the
 [NFC form](https://en.wikipedia.org/wiki/Unicode_equivalence), for example using:
 

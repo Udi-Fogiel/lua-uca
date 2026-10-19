@@ -64,6 +64,10 @@ local options = {
   -- Unified_Ideograph ranges) or "radical-stroke"; only when the collator is
   -- created
   han_order = {implicit = true, ["radical-stroke"] = true},
+  -- the rules of a CLDR locale, given by a BCP 47 language tag: "cs",
+  -- "de-u-co-phonebk", "zh-TW"; the -u- keys set options (-u-kn for
+  -- numeric, ...); only when the collator is created
+  locale = "string",
   -- sequences of decimal digits sorted by their numeric value (UTS #35)
   numeric = "boolean",
 }
@@ -71,12 +75,12 @@ local options = {
 local function set_option(self, name, value)
   local allowed = options[name]
   if not allowed then error("lua-uca: unknown option " .. tostring(name), 3) end
-  if name == "han_order" and rawget(self, "created") then
-    error("lua-uca: the option han_order can only be given to collator.new", 3)
+  if (name == "han_order" or name == "locale") and rawget(self, "created") then
+    error("lua-uca: the option " .. name .. " can only be given to collator.new", 3)
   end
   if value ~= nil then
-    if allowed == "boolean" then
-      if type(value) ~= "boolean" then error("lua-uca: option " .. name .. " must be a boolean", 3) end
+    if allowed == "boolean" or allowed == "string" then
+      if type(value) ~= allowed then error("lua-uca: option " .. name .. " must be a " .. allowed, 3) end
     elseif not allowed[value] then
       error("lua-uca: wrong value for option " .. name .. ": " .. tostring(value), 3)
     end
@@ -148,6 +152,19 @@ local function walk_entries(entry, fn)
 end
 collator.walk_entries = walk_entries
 
+-- the rules of CLDR's locales, loaded when they are used
+local locales_lib
+local function get_locales()
+  if not locales_lib then
+    if kpse then
+      locales_lib = require "lua-uca.lua-uca-locales"
+    else
+      locales_lib = require "lua-uca.locales"
+    end
+  end
+  return locales_lib
+end
+
 function collator.new(codes, settings)
   local self = setmetatable({settings = {}}, instance)
   -- tree with mappings from codepoints to collation elements
@@ -157,9 +174,26 @@ function collator.new(codes, settings)
   -- cached sort keys
   self.stringcache = {}
   self.tailoring_multiplier = {1, 1, 1, 1}
-  for name, value in pairs(settings or {}) do set_option(self, name, value) end
+  settings = settings or {}
+  if settings.han_order then set_option(self, "han_order", settings.han_order) end
   if self.settings.han_order == "radical-stroke" then
     self:use_radical_stroke()
+  end
+  -- the locale's rules, then the options of its -u- keys, then the other
+  -- options: each one overrides the settings before it, as in ICU
+  if settings.locale then
+    set_option(self, "locale", settings.locale)
+    local locales = get_locales()
+    local rules, message = locales.rules(settings.locale)
+    if not rules then error("lua-uca: " .. message, 2) end
+    local options, reorder = locales.options(settings.locale)
+    self:tailor_string(rules)
+    self:apply_rules()
+    self:set(options)
+    if reorder then self:reorder(reorder) end
+  end
+  for name, value in pairs(settings) do
+    if name ~= "han_order" and name ~= "locale" then set_option(self, name, value) end
   end
   rawset(self, "created", true)
   return self
@@ -937,7 +971,6 @@ local rule_settings = {
   normalization = function() end,
   numericOrdering = function(self, value) self:set {numeric = value} end,
   hiraganaQ = function() end,
-  import = function(self, value) error("lua-uca: [import " .. value .. "] is not supported", 0) end,
   -- only makes the tables smaller in ICU
   optimize = function() end,
   -- applied by the builder, where it occurs in the rules
@@ -975,9 +1008,26 @@ local rule_checks = {
 -- several calls are collected and built together when the collator is used,
 -- as one rule text, so that the new weights of all of them are spaced in
 -- their gaps at once
+-- the items of rules, with the rules of [import tag] in its place, as ICU
+-- (their settings too); the escapes are those of the rules in data (ICU's
+-- u_unescape)
+local function parse_rules(text, depth)
+  if depth > 10 then error("lua-uca: [import] nested too deeply", 0) end
+  local items = {}
+  for _, item in ipairs(rules_lib.parse(rules_lib.unescape(text), rule_checks)) do
+    if item.kind == "setting" and item.name == "import" then
+      local imported, message = get_locales().import_rules(item.value)
+      if not imported then error("lua-uca: [import " .. item.value .. "] failed: " .. message, 0) end
+      for _, sub in ipairs(parse_rules(imported, depth + 1)) do items[#items + 1] = sub end
+    else
+      items[#items + 1] = item
+    end
+  end
+  return items
+end
+
 function collator:tailor_string(s)
-  -- the escapes are those of the rules in data (ICU's u_unescape)
-  local items = rules_lib.parse(rules_lib.unescape(s), rule_checks)
+  local items = parse_rules(s, 0)
   local pending = rawget(self, "pending_rules")
   if not pending then
     pending = {}
