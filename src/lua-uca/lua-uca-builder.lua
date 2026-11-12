@@ -2,7 +2,7 @@
 -- (collationbuilder.cpp), with CollationRootElements
 -- (collationrootelements.cpp) and CollationWeights (collationweights.cpp);
 -- builder.build(collator, items, deps) applies the items of rules.parse to
--- the collator, whose table starts as a copy of the root collation
+-- the collator, whose table is then a copy of the root collation
 -- weights: primaries 32 bits, secondaries and tertiaries 16 bits, case in the
 -- case field, quaternary (0-3) in the quaternary field
 -- TODO: ICU's canonical closure (addWithClosure, addTailComposites,
@@ -269,15 +269,39 @@ local function upper_bound(list, w)
   return low
 end
 
-local function new_root_elements(root_codes, root_info, implicit, han_ranges, walk_entries)
+-- call fn for an entry of the table and every entry below it: its
+-- contractions (children) and the entries of its prefix contexts
+-- (prefixes: a tree of the preceding code points, in reverse, whose nodes
+-- have an entry and the longer prefixes in more)
+local function walk_entries(entry, fn)
+  fn(entry)
+  for _, child in pairs(entry.children or {}) do walk_entries(child, fn) end
+  local function walk_prefixes(map)
+    for _, node in pairs(map) do
+      if node.entry then walk_entries(node.entry, fn) end
+      if node.more then walk_prefixes(node.more) end
+    end
+  end
+  if entry.prefixes then walk_prefixes(entry.prefixes) end
+end
+M.walk_entries = walk_entries
+
+-- the weights in use in a root table: sorted primaries, the sec/ter lists of
+-- the primaries with more than the common weights, the sorted sec/ter of the
+-- primary ignorables, the sorted tertiaries of the secondary ignorables;
+-- tools/make_root_elements.lua writes this for the shipped root
+function M.collect_root_elements(root_codes, root_info)
   local primaries, sec_ter, secondary_ces, tertiary_ces = {}, {}, {}, {}
   local function add(element)
     local p, s, t = element[1], element[2], element[3]
     if p ~= 0 then
       primaries[#primaries + 1] = p
-      local list = sec_ter[p]
-      if not list then list = {COMMON_SEC_AND_TER}; sec_ter[p] = list end
-      list[#list + 1] = s * 0x10000 + t
+      local st = s * 0x10000 + t
+      if st ~= COMMON_SEC_AND_TER then
+        local list = sec_ter[p]
+        if not list then list = {COMMON_SEC_AND_TER}; sec_ter[p] = list end
+        list[#list + 1] = st
+      end
     elseif s ~= 0 then
       secondary_ces[#secondary_ces + 1] = s * 0x10000 + t
     elseif t ~= 0 then
@@ -297,10 +321,28 @@ local function new_root_elements(root_codes, root_info, implicit, han_ranges, wa
   add({root_info.first_trail_byte * 0x1000000 + 0x020200, COMMON_WEIGHT16, COMMON_WEIGHT16})
   -- the collation elements of the FDD0 contractions, not mappings
   for _, element in ipairs(root_info.root_elements or {}) do add(element) end
-  primaries = sorted_unique(primaries)
   for p, list in pairs(sec_ter) do sec_ter[p] = sorted_unique(list) end
-  secondary_ces = sorted_unique(secondary_ces)
-  tertiary_ces = sorted_unique(tertiary_ces)
+  return {
+    primaries = sorted_unique(primaries),
+    sec_ter = sec_ter,
+    secondary_ces = sorted_unique(secondary_ces),
+    tertiary_ces = sorted_unique(tertiary_ces),
+  }
+end
+
+-- the generated weights of the shipped root; another table is walked
+local function generated_root_elements(root_codes)
+  local names = {"lua-uca.lua-uca-root", "lua-uca.lua-uca-root-jit", "lua-uca.root", "lua-uca.root-jit"}
+  for _, name in ipairs(names) do
+    if package.loaded[name] == root_codes then
+      return require(kpse and "lua-uca.lua-uca-root-elements" or "lua-uca.root-elements")
+    end
+  end
+end
+
+local function new_root_elements(data, root_info, implicit, han_ranges)
+  local primaries, sec_ter = data.primaries, data.sec_ter
+  local secondary_ces, tertiary_ces = data.secondary_ces, data.tertiary_ces
 
   local R = {}
   -- FractionalUCA.txt's fixed bytes: first ignorable secondary 80, first
@@ -407,7 +449,8 @@ local function new_root_elements(root_codes, root_info, implicit, han_ranges, wa
     return {q, floor(st / 0x10000), st % 0x10000}
   end
   function R.first_ce_with_primary_at_least(p)
-    local q = (sec_ter[p] or is_han(p)) and p or R.primary_after(p)
+    local is_root = primaries[upper_bound(primaries, p) - 1] == p
+    local q = (is_root or is_han(p)) and p or R.primary_after(p)
     return {q, COMMON_WEIGHT16, COMMON_WEIGHT16}
   end
   return R
@@ -415,7 +458,7 @@ end
 
 -- shared by the collators of a root (and Han order)
 local root_elements_cache = setmetatable({}, {__mode = "k"})
-function M.root_elements(root_codes, root_info, implicit, han_ranges, walk_entries)
+function M.root_elements(root_codes, root_info, implicit, han_ranges)
   local cache = root_elements_cache[root_codes]
   if not cache then
     cache = setmetatable({}, {__mode = "k"})
@@ -423,7 +466,8 @@ function M.root_elements(root_codes, root_info, implicit, han_ranges, walk_entri
   end
   local R = cache[han_ranges]
   if not R then
-    R = new_root_elements(root_codes, root_info, implicit, han_ranges, walk_entries)
+    local data = generated_root_elements(root_codes) or M.collect_root_elements(root_codes, root_info)
+    R = new_root_elements(data, root_info, implicit, han_ranges)
     cache[han_ranges] = R
   end
   return R
@@ -452,7 +496,7 @@ local function is_jamo_v(c) return c >= 0x1161 and c <= 0x1175 end
 
 function M.build(collator, items, deps)
   local implicit, root_info = deps.implicit, deps.root_info
-  local root = M.root_elements(collator.root_codes, root_info, implicit, deps.han_ranges, collator.walk_entries)
+  local root = M.root_elements(collator.root_codes, root_info, implicit, deps.han_ranges)
 
   -- nodes: weight (32 bits for primaries, 16 bits otherwise), strength,
   -- tailored, before2, before3, previous, next (indexes, 0 for none)

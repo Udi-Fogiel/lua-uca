@@ -294,3 +294,46 @@ describe("collator test suite",function()
   end)
 
 end)
+
+describe("the shared root", function()
+  -- every weight of an entry and of the entries below it, in a fixed order
+  local function fingerprint(tbl)
+    local keys = {}
+    for k in pairs(tbl) do keys[#keys + 1] = k end
+    table.sort(keys, function(a, b) return tostring(a) < tostring(b) end)
+    local out = {}
+    for _, k in ipairs(keys) do
+      local v = tbl[k]
+      out[#out + 1] = tostring(k) .. "=" .. (type(v) == "table" and fingerprint(v) or tostring(v))
+    end
+    return "{" .. table.concat(out, ",") .. "}"
+  end
+  it("should not be changed by a collator", function()
+    local before = fingerprint(ducet)
+    local plain = collator.new(ducet)
+    assert.equal(plain.codes, ducet)
+    plain:compare_strings("cote", "côté")
+    plain:get_lowest_char("č")
+    local tailored = collator.new(ducet)
+    tailored:tailor_string("&c<č<<<Č&x<ch|y&a=q")
+    tailored:compare_strings("cote", "čote")
+    local old_methods = collator.new(ducet)
+    local codepoints = function(s) return old_methods:string_to_codepoints(s) end
+    old_methods:tailor(codepoints("a"), codepoints("q"), {1, 0, 0})
+    old_methods:equal(codepoints("a"), codepoints("w"))
+    local reordered = collator.new(ducet)
+    reordered:reorder {"cyrillic", "latin"}
+    reordered:compare_strings("a", "я")
+    local radical = collator.new(ducet, {han_order = "radical-stroke"})
+    radical:compare_strings("一", "丁")
+    local locale = collator.new(ducet, {locale = "cs"})
+    locale:compare_strings("cote", "čote")
+    assert.equal(fingerprint(ducet), before)
+  end)
+  it("should have generated root elements equal to the table's", function()
+    local builder = require(kpse and "lua-uca.lua-uca-builder" or "lua-uca.builder")
+    local info = require(kpse and "lua-uca.lua-uca-root-info" or "lua-uca.root-info")
+    local elements = require(kpse and "lua-uca.lua-uca-root-elements" or "lua-uca.root-elements")
+    assert.equal(fingerprint(builder.collect_root_elements(ducet, info)), fingerprint(elements))
+  end)
+end)

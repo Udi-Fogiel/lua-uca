@@ -135,21 +135,7 @@ end
 
 collator.copy_table = copy_table
 
--- call fn for an entry of the table and every entry below it: its
--- contractions (children) and the entries of its prefix contexts
--- (prefixes: a tree of the preceding code points, in reverse, whose nodes
--- have an entry and the longer prefixes in more)
-local function walk_entries(entry, fn)
-  fn(entry)
-  for _, child in pairs(entry.children or {}) do walk_entries(child, fn) end
-  local function walk_prefixes(map)
-    for _, node in pairs(map) do
-      if node.entry then walk_entries(node.entry, fn) end
-      if node.more then walk_prefixes(node.more) end
-    end
-  end
-  if entry.prefixes then walk_prefixes(entry.prefixes) end
-end
+local walk_entries = builder.walk_entries
 collator.walk_entries = walk_entries
 
 -- the rules of CLDR's locales, loaded when they are used
@@ -167,10 +153,11 @@ end
 
 function collator.new(codes, settings)
   local self = setmetatable({settings = {}}, instance)
-  -- tree with mappings from codepoints to collation elements
-  self.codes = copy_table(codes or {})
-  -- the root collation, unchanged, for the case of tailored strings
+  -- the root collation, shared between collators and never changed
   self.root_codes = codes or {}
+  -- tree with mappings from codepoints to collation elements: the root
+  -- until something writes to it (own_codes)
+  self.codes = self.root_codes
   -- cached sort keys
   self.stringcache = {}
   self.tailoring_multiplier = {1, 1, 1, 1}
@@ -197,6 +184,11 @@ function collator.new(codes, settings)
   end
   rawset(self, "created", true)
   return self
+end
+
+-- a copy of the root for this collator: to call before writing to self.codes
+function collator:own_codes()
+  if self.codes == self.root_codes then self.codes = copy_table(self.root_codes) end
 end
 
 -- change options
@@ -267,6 +259,7 @@ end
 function collator:use_radical_stroke()
   local ranges = get_radical_ranges()
   rawset(self, "han_ranges", ranges)
+  self:own_codes()
   local function update(entry)
     for _, element in ipairs(entry.value or {}) do
       if element.han then element[1] = implicit.han_primary(element.han, ranges) end
@@ -831,6 +824,7 @@ end
 
 -- a mapping with a prefix context: key after prefix
 function collator:update_prefix(prefix, key, elements)
+  self:own_codes()
   local first = key[1]
   local entry = self.codes[first]
   if not entry then
@@ -863,6 +857,7 @@ end
 
 -- update collation codes
 function collator:update_codes(key, elements)
+  self:own_codes()
   local keys = self.codes
   local function add_to_tree(tbl, current_pos)
     local tbl = tbl or {}

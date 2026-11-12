@@ -22,6 +22,7 @@ build = {
       ["lua-uca.root"] = "src/lua-uca/lua-uca-root.lua",
       ["lua-uca.root-jit"] = "src/lua-uca/lua-uca-root-jit.lua",
       ["lua-uca.root-info"] = "src/lua-uca/lua-uca-root-info.lua",
+      ["lua-uca.root-elements"] = "src/lua-uca/lua-uca-root-elements.lua",
       ["lua-uca.han-radical"] = "src/lua-uca/lua-uca-han-radical.lua",
       ["lua-uca.languages"] = "src/lua-uca/lua-uca-languages.lua",
       ["lua-uca.chinese"] = "src/lua-uca/lua-uca-chinese.lua",

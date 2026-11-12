@@ -117,6 +117,7 @@ local function move_primary(weight, moves)
 end
 
 local function reorder_collator(collator, blocks)
+  collator:own_codes()
   local moves = make_moves(blocks)
   -- the weights moved by a previous reordering are moved back first: the
   -- previous moves at their new places
