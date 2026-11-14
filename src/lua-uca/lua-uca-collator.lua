@@ -286,9 +286,29 @@ end
 -- contractions; when none of a context's contractions matches and it has no
 -- mapping of its own, the next shorter context, and ultimately the mapping
 -- without context (ICU's CONTRACT_SINGLE_CP_NO_MATCH)
+-- the longest contraction from an entry: the weights, the position of its
+-- last code point and its entry, or nil
+local function read_children(codepoints, parent, pos)
+  local children = parent.children
+  if not children then return nil end
+  local newpos = pos + 1
+  local newcodepoint = codepoints[newpos]
+  -- if we go out of the codepoint array
+  if not newcodepoint then return nil end
+  local child = children[newcodepoint]
+  if child then
+    local nextchild, nextpos, nextnode = read_children(codepoints, child, newpos)
+    if nextchild then return nextchild, nextpos, nextnode end
+    if child.value then return child.value, newpos, child end
+  end
+  return nil
+end
+
 function collator:read_weight(codepoints, pos)
   local codes = self.codes[codepoints[pos]]
   if not codes then return nil, pos + 1 end
+  -- most characters: no context, no contractions
+  if not codes.prefixes and not codes.children then return codes.value, pos + 1 end
   -- the entries of the matching contexts, from no context to the longest
   local chain
   local map = codes.prefixes
@@ -303,25 +323,10 @@ function collator:read_weight(codepoints, pos)
       k = k - 1
     end
   end
-  -- the longest contraction from an entry
-  local function read_children(parent, pos)
-    local children = parent.children or {}
-    local newpos = pos + 1
-    local newcodepoint = codepoints[newpos]
-    -- if we go out of the codepoint array
-    if not newcodepoint then return nil end
-    local child = children[newcodepoint]
-    if child then
-      local nextchild, nextpos, nextnode = read_children(child, newpos)
-      if nextchild then return nextchild, nextpos, nextnode end
-      if child.value then return child.value, newpos, child end
-    end
-    return nil
-  end
   local weights, new_pos, node
   for j = chain and #chain or 1, 1, -1 do
     local entry = chain and chain[j] or codes
-    weights, new_pos, node = read_children(entry, pos)
+    weights, new_pos, node = read_children(codepoints, entry, pos)
     if not weights and entry.value then
       weights, new_pos, node = entry.value, pos, entry
     end
@@ -602,81 +607,17 @@ local case_weight = {
 }
 local tertiary_range = 0x10000
 
-local function case_weights(weights, case_first, case_level, strength)
-  local c_of = case_weight[case_first == "upper" and "upper" or "lower"]
-  local new = {}
-  for i, element in ipairs(weights) do
-    local p, s, t = element[1], element[2], element[3]
-    local c = c_of[element.case or 0]
-    local changed
-    if case_level then
-      if p == 0 and (s == 0 or strength == 1) then
-        -- tertiary and tertiary-ignorable collation elements have no case,
-        -- at strength 1 neither have the primary ignorable ones
-        changed = {0, s, 0, t}
-      else
-        changed = {p, s, c, t}
-      end
-    else
-      if p == 0 and s == 0 and t == 0 then
-        changed = {0, 0, 0}
-      elseif p == 0 and s == 0 then
-        -- tertiary collation elements: 3, so that they stay above the
-        -- others (UCA's WF2)
-        changed = {0, 0, 3 * tertiary_range + t}
-      else
-        changed = {p, s, c * tertiary_range + t}
-      end
-    end
-    changed.quaternary = element.quaternary
-    new[i] = changed
-  end
-  return new
-end
-
 -- variable weighting (UTS #10, section 4): the option variable_weighting is
 -- "non-ignorable" (the default), "shifted" or "blanked"
 -- the weights of the variable collation elements and of the ignorable ones
 -- after them are reset to zero; shifted adds a quaternary level, with the
 -- old primary weight of the variable collation elements, FFFFFFFC (plus a
 -- tailored quaternary difference) for the other non-ignorable ones
-local function variable_weights(weights, levels, shifted, after_variable, variable_top, inverse)
-  local new = {}
-  for i, element in ipairs(weights) do
-    local reset, quaternary
-    -- variable or not by the weight before script reordering (UTS #35)
-    local primary = element[1]
-    if inverse and primary ~= 0 then primary = tailoring_lib.move_primary(primary, inverse) end
-    if primary > segment_separator and primary <= variable_top then
-      -- variable collation element
-      reset, quaternary, after_variable = true, element[1], true
-    elseif element[1] == 0 then
-      -- ignorable collation element
-      if after_variable then
-        reset, quaternary = true, 0
-      else
-        local completely_ignorable = true
-        for level = 2, levels do
-          if element[level] ~= 0 then completely_ignorable = false end
-        end
-        reset, quaternary = false, completely_ignorable and 0 or common_quaternary + (element.quaternary or 0)
-      end
-    else
-      reset, quaternary, after_variable = false, common_quaternary + (element.quaternary or 0), false
-    end
-    local changed = {}
-    for level = 1, levels do
-      changed[level] = reset and 0 or element[level]
-    end
-    if shifted then changed[levels + 1] = quaternary end
-    new[i] = changed
-  end
-  return new, after_variable
-end
 
 -- make sort key from codepoints array (it can be created using the utf8.codes() function
 function collator:make_sort_key(codepoints)
-  local levels = {}
+  -- the non-zero weights of each level, and their numbers
+  local levels, counts = {{}, {}, {}, {}, {}}, {0, 0, 0, 0, 0}
   local pos = 1
   local weights, remaining
   local sort_key = {}
@@ -695,41 +636,113 @@ function collator:make_sort_key(codepoints)
   -- the quaternary level: at strength 4, by default with shifted
   local quaternary = strength == 4 or (strength == nil and variable == "shifted")
   local variable_top = variable_tops[settings.max_variable or "punct"]
+  local accents_backward = settings.accents_backward
   local after_variable = false
+  local cased = case_first or case_level
+  local c_of = case_weight[case_first == "upper" and "upper" or "lower"]
+  local shifted = variable == "shifted"
+  -- the quaternary weights of the tailorings, without shifted
+  local quaternary_of_tailorings = quaternary and not shifted
+  local transformed = cased or variable or quaternary_of_tailorings
+  local reorder_inverse = rawget(self, "reorder_inverse")
+  local move_primary = tailoring_lib.move_primary
+  local level1, level2, level3, level4, level5 = levels[1], levels[2], levels[3], levels[4], levels[5]
   while true do
     --
     weights, pos, remaining = self:get_weights(codepoints, pos)
     codepoints = remaining or codepoints
-    if case_first or case_level then
-      weights = case_weights(weights, case_first, case_level, strength)
-    end
-    if variable then
-      weights, after_variable = variable_weights(weights, element_levels, variable == "shifted", after_variable, variable_top, rawget(self, "reorder_inverse"))
-    end
-    if quaternary and variable ~= "shifted" then
-      -- the quaternary weights of the tailorings
-      local new = {}
-      for i, element in ipairs(weights) do
-        local changed = {}
-        local ignorable = true
-        for level = 1, element_levels do
-          changed[level] = element[level]
-          if element[level] ~= 0 then ignorable = false end
+    if not transformed then
+      for e = 1, #weights do
+        local element = weights[e]
+        if accents_backward and element[1] == segment_separator then
+          separators[#separators + 1] = counts[2] + 1
         end
-        changed[element_levels + 1] = ignorable and 0 or common_quaternary + (element.quaternary or 0)
-        new[i] = changed
-      end
-      weights = new
-    end
-    if settings.accents_backward then
-      for _, element in ipairs(weights) do
-        if element[1] == segment_separator then
-          separators[#separators + 1] = #(levels[2] or {}) + 1
+        for i = 1, #element do
+          local x = element[i]
+          if x ~= 0 then
+            local n = counts[i] + 1
+            counts[i] = n
+            levels[i][n] = x
+          end
         end
-        levels = self:update_levels(levels, {element})
       end
     else
-      levels = self:update_levels(levels, weights)
+      -- the case, variable and quaternary weights of each collation
+      -- element, in w1 to w5 (len of them)
+      for e = 1, #weights do
+        local element = weights[e]
+        local w1, w2, w3, w4, w5
+        local tailored_quaternary = element.quaternary
+        if cased then
+          local p, s, t = element[1], element[2], element[3]
+          local c = c_of[element.case or 0]
+          if case_level then
+            if p == 0 and (s == 0 or strength == 1) then
+              -- tertiary and tertiary-ignorable collation elements have no
+              -- case, at strength 1 neither have the primary ignorable ones
+              w1, w2, w3, w4 = 0, s, 0, t
+            else
+              w1, w2, w3, w4 = p, s, c, t
+            end
+          elseif p == 0 and s == 0 and t == 0 then
+            w1, w2, w3 = 0, 0, 0
+          elseif p == 0 and s == 0 then
+            -- tertiary collation elements: 3, so that they stay above the
+            -- others (UCA's WF2)
+            w1, w2, w3 = 0, 0, 3 * tertiary_range + t
+          else
+            w1, w2, w3 = p, s, c * tertiary_range + t
+          end
+        else
+          w1, w2, w3 = element[1], element[2], element[3]
+        end
+        local len = element_levels
+        if variable then
+          local reset, q
+          -- variable or not by the weight before script reordering (UTS #35)
+          local primary = w1
+          if reorder_inverse and primary ~= 0 then primary = move_primary(primary, reorder_inverse) end
+          if primary > segment_separator and primary <= variable_top then
+            -- variable collation element
+            reset, q, after_variable = true, w1, true
+          elseif w1 == 0 then
+            -- ignorable collation element
+            if after_variable then
+              reset, q = true, 0
+            else
+              local completely_ignorable = w2 == 0 and w3 == 0 and (len == 3 or w4 == 0)
+              reset, q = false, completely_ignorable and 0 or common_quaternary + (tailored_quaternary or 0)
+            end
+          else
+            reset, q, after_variable = false, common_quaternary + (tailored_quaternary or 0), false
+          end
+          if reset then
+            w1, w2, w3 = 0, 0, 0
+            if len == 4 then w4 = 0 end
+          end
+          if shifted then
+            len = len + 1
+            if len == 4 then w4 = q else w5 = q end
+          end
+          -- the variable weights do not keep the tailored quaternary
+          tailored_quaternary = nil
+        end
+        if quaternary_of_tailorings then
+          local ignorable = w1 == 0 and w2 == 0 and w3 == 0 and (len == 3 or w4 == 0)
+          local q = ignorable and 0 or common_quaternary + (tailored_quaternary or 0)
+          len = len + 1
+          if len == 4 then w4 = q else w5 = q end
+        end
+        if accents_backward and w1 == segment_separator then
+          separators[#separators + 1] = counts[2] + 1
+        end
+        local n
+        if w1 ~= 0 then n = counts[1] + 1; counts[1] = n; level1[n] = w1 end
+        if w2 ~= 0 then n = counts[2] + 1; counts[2] = n; level2[n] = w2 end
+        if w3 ~= 0 then n = counts[3] + 1; counts[3] = n; level3[n] = w3 end
+        if len >= 4 and w4 ~= 0 then n = counts[4] + 1; counts[4] = n; level4[n] = w4 end
+        if len == 5 and w5 ~= 0 then n = counts[5] + 1; counts[5] = n; level5[n] = w5 end
+      end
     end
     -- break when we reach end of the codepoints array
     if not pos then break end
@@ -737,9 +750,9 @@ function collator:make_sort_key(codepoints)
   -- (df) Reverse sort for accents?
   -- the secondary weights are reversed in each segment between the U+FFFE
   -- weights (UTS #10, S3.6), the U+FFFE weights stay in place
-  if settings.accents_backward and levels[2] and strength ~= 1 then
+  if accents_backward and strength ~= 1 then
     local secondary = levels[2]
-    separators[#separators + 1] = #secondary + 1
+    separators[#separators + 1] = counts[2] + 1
     local start = 1
     for _, separator in ipairs(separators) do
       local stop = separator - 1
@@ -758,12 +771,16 @@ function collator:make_sort_key(codepoints)
   if case_level then included[#included + 1] = 3 end
   if strength == nil or strength >= 3 then included[#included + 1] = element_levels end
   if quaternary then included[#included + 1] = element_levels + 1 end
+  local n = 0
   for _, i in ipairs(included) do
-    for _, element in ipairs(levels[i] or {}) do
-      table.insert(sort_key, element)
+    local level = levels[i]
+    for j = 1, counts[i] do
+      n = n + 1
+      sort_key[n] = level[j]
     end
     -- zero separates levels in the sort key
-    table.insert(sort_key, 0)
+    n = n + 1
+    sort_key[n] = 0
   end
   -- the identical level (UTS #10, S3.10): the NFD code points, shifted by 2
   -- so that they are above the level separator, U+FFFE with the minimal
@@ -777,7 +794,8 @@ function collator:make_sort_key(codepoints)
       end
     end
     for _, code in ipairs(nfd) do
-      table.insert(sort_key, code == 0xFFFE and 1 or code + 2)
+      n = n + 1
+      sort_key[n] = code == 0xFFFE and 1 or code + 2
     end
   end
   return sort_key
