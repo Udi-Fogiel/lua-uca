@@ -614,8 +614,12 @@ local tertiary_range = 0x10000
 -- old primary weight of the variable collation elements, FFFFFFFC (plus a
 -- tailored quaternary difference) for the other non-ignorable ones
 
+local read_weight, get_implicit_weight = collator.read_weight, collator.get_implicit_weight
+
 -- make sort key from codepoints array (it can be created using the utf8.codes() function
 function collator:make_sort_key(codepoints)
+  -- the rules change the settings too: applied before they are read
+  if rawget(self, "pending_rules") then self:apply_rules() end
   -- the non-zero weights of each level, and their numbers
   local levels, counts = {{}, {}, {}, {}, {}}, {0, 0, 0, 0, 0}
   local pos = 1
@@ -647,10 +651,26 @@ function collator:make_sort_key(codepoints)
   local reorder_inverse = rawget(self, "reorder_inverse")
   local move_primary = tailoring_lib.move_primary
   local level1, level2, level3, level4, level5 = levels[1], levels[2], levels[3], levels[4], levels[5]
+  local numeric = settings.numeric
+  local count = #codepoints
   while true do
-    --
-    weights, pos, remaining = self:get_weights(codepoints, pos)
-    codepoints = remaining or codepoints
+    -- the weights at pos, as get_weights
+    if numeric and digit_value(self, codepoints[pos]) then
+      weights, pos = numeric_weights(self, codepoints, pos)
+    else
+      weights, pos, remaining = read_weight(self, codepoints, pos)
+      if remaining then
+        codepoints, count = remaining, #remaining
+      end
+      if not weights then
+        -- Hangul syllables without a mapping of their own, then the
+        -- implicit weights
+        weights = hangul_weights(self, codepoints[pos - 1])
+        if not weights then weights = get_implicit_weight(self, codepoints, pos - 1) end
+      end
+    end
+    -- pos is nil at the end of the codepoints array
+    if pos > count then pos = nil end
     if not transformed then
       for e = 1, #weights do
         local element = weights[e]

@@ -108,6 +108,14 @@ describe("collator test suite",function()
     -- canonical equivalents are still equal
     assert.same(c:make_sort_key(c:string_to_codepoints("é")), c:make_sort_key(c:string_to_codepoints("e\u{301}")))
   end)
+  it("should apply the settings of the rules to the first sort key", function()
+    for _, rules in ipairs {"[caseFirst upper]", "[alternate shifted]", "[backwards 2]", "[reorder Grek]"} do
+      local c = collator.new(ducet)
+      c:tailor_string(rules)
+      local cps = c:string_to_codepoints("Côte-α")
+      assert.same(c:make_sort_key(cps), c:make_sort_key(cps))
+    end
+  end)
   it("options should work", function()
     local key = function(c, s) return c:make_sort_key(c:string_to_codepoints(s)) end
     -- options at the creation, or with set
