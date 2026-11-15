@@ -616,6 +616,47 @@ local tertiary_range = 0x10000
 
 local read_weight, get_implicit_weight = collator.read_weight, collator.get_implicit_weight
 
+-- the variable collation elements after script reordering: the reordered
+-- primary weights whose weight before reordering is variable (from low to
+-- high), as sorted ranges; computed once for each reordering and variable top
+local variable_ranges_cache = setmetatable({}, {__mode = "k"})
+local function variable_ranges(inverse, low, high)
+  local cache = variable_ranges_cache[inverse]
+  if not cache then
+    cache = {}
+    variable_ranges_cache[inverse] = cache
+  end
+  if cache[high] then return cache[high] end
+  -- inverse: the sorted, disjoint ranges of reordered weights, with the
+  -- difference to their weights before reordering; the other weights are
+  -- not moved
+  local ranges = {}
+  local cursor = low
+  for _, range in ipairs(inverse) do
+    local first, last, difference = range[1], range[2], range[3]
+    local from, to = math.max(first, low - difference), math.min(last, high - difference)
+    if from <= to then ranges[#ranges + 1] = {from, to} end
+    if last >= cursor and first <= high then
+      if first > cursor then ranges[#ranges + 1] = {cursor, math.min(first - 1, high)} end
+      cursor = last + 1
+    end
+  end
+  if cursor <= high then ranges[#ranges + 1] = {cursor, high} end
+  table.sort(ranges, function(x, y) return x[1] < y[1] end)
+  -- adjacent ranges joined
+  local joined = {}
+  for _, range in ipairs(ranges) do
+    local previous = joined[#joined]
+    if previous and range[1] <= previous[2] + 1 then
+      if range[2] > previous[2] then previous[2] = range[2] end
+    else
+      joined[#joined + 1] = {range[1], range[2]}
+    end
+  end
+  cache[high] = joined
+  return joined
+end
+
 -- with 64-bit integers (Lua 5.3 and later), two 32-bit weights are packed in
 -- each number of the sort key: the first in the upper half; adding the sign
 -- bit (with wraparound) makes the signed order of the integers the unsigned
@@ -656,8 +697,20 @@ function collator:make_sort_key(codepoints)
   -- the quaternary weights of the tailorings, without shifted
   local quaternary_of_tailorings = quaternary and not shifted
   local transformed = cased or variable or quaternary_of_tailorings
+  -- the variable collation elements: their primary weights in one range
+  -- (variable_low to variable_high), or in several after reordering
+  local variable_low, variable_high, variable_list = segment_separator + 1, variable_top, nil
   local reorder_inverse = rawget(self, "reorder_inverse")
-  local move_primary = tailoring_lib.move_primary
+  if variable and reorder_inverse then
+    local ranges = variable_ranges(reorder_inverse, variable_low, variable_high)
+    if #ranges == 1 then
+      variable_low, variable_high = ranges[1][1], ranges[1][2]
+    else
+      -- no range, or the list of them
+      variable_low, variable_high = 1, 0
+      if #ranges > 1 then variable_list = ranges end
+    end
+  end
   local level1, level2, level3, level4, level5 = levels[1], levels[2], levels[3], levels[4], levels[5]
   local numeric = settings.numeric
   local count = #codepoints
@@ -728,9 +781,14 @@ function collator:make_sort_key(codepoints)
         if variable then
           local reset, q
           -- variable or not by the weight before script reordering (UTS #35)
-          local primary = w1
-          if reorder_inverse and primary ~= 0 then primary = move_primary(primary, reorder_inverse) end
-          if primary > segment_separator and primary <= variable_top then
+          local is_variable = w1 >= variable_low and w1 <= variable_high
+          if variable_list then
+            for r = 1, #variable_list do
+              local range = variable_list[r]
+              if w1 >= range[1] and w1 <= range[2] then is_variable = true break end
+            end
+          end
+          if is_variable then
             -- variable collation element
             reset, q, after_variable = true, w1, true
           elseif w1 == 0 then
