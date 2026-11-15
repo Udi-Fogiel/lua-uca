@@ -667,19 +667,23 @@ end
 local pack_pairs = math.type ~= nil and math.type(0) == "integer"
 local pair_shift, sign_bit = 0x100000000, math.mininteger
 
+-- shared for speed
+local level_tables = {{}, {}, {}, {}, {}}
+local separator_table, count_table, included_table = {}, {}, {}
+
 -- make sort key from codepoints array (it can be created using the utf8.codes() function
 function collator:make_sort_key(codepoints)
   -- the rules change the settings too: applied before they are read
   if rawget(self, "pending_rules") then self:apply_rules() end
   -- the non-zero weights of each level, and their numbers (n1 to n5)
-  local levels = {{}, {}, {}, {}, {}}
+  local levels = level_tables
   local n1, n2, n3, n4, n5 = 0, 0, 0, 0, 0
   local pos = 1
   local weights, remaining
   local sort_key = {}
   local original = codepoints
   -- positions of the U+FFFE weights in the secondary level
-  local separators = {}
+  local separators, separator_count = separator_table, 0
   local settings = self.settings
   local case_first = settings.case_first
   if case_first == "off" then case_first = nil end
@@ -717,14 +721,21 @@ function collator:make_sort_key(codepoints)
   local level1, level2, level3, level4, level5 = levels[1], levels[2], levels[3], levels[4], levels[5]
   local numeric = settings.numeric
   local count = #codepoints
+  local codes = self.codes
   while true do
     -- the weights at pos, as get_weights
     if numeric and digit_value(self, codepoints[pos]) then
       weights, pos = numeric_weights(self, codepoints, pos)
     else
-      weights, pos, remaining = read_weight(self, codepoints, pos)
-      if remaining then
-        codepoints, count = remaining, #remaining
+      local entry = codes[codepoints[pos]]
+      if not entry or not (entry.prefixes or entry.children) then
+        -- most characters: no context, no contractions (as read_weight)
+        weights, pos = entry and entry.value, pos + 1
+      else
+        weights, pos, remaining = read_weight(self, codepoints, pos)
+        if remaining then
+          codepoints, count = remaining, #remaining
+        end
       end
       if not weights then
         -- Hangul syllables without a mapping of their own, then the
@@ -742,7 +753,8 @@ function collator:make_sort_key(codepoints)
         local p, s, t = element[1], element[2], element[3]
         if p ~= 0 then
           if accents_backward and p == segment_separator then
-            separators[#separators + 1] = n2 + 1
+            separator_count = separator_count + 1
+            separators[separator_count] = n2 + 1
           end
           n1 = n1 + 1; level1[n1] = p
         end
@@ -822,7 +834,8 @@ function collator:make_sort_key(codepoints)
           if len == 4 then w4 = q else w5 = q end
         end
         if accents_backward and w1 == segment_separator then
-          separators[#separators + 1] = n2 + 1
+          separator_count = separator_count + 1
+          separators[separator_count] = n2 + 1
         end
         if w1 ~= 0 then n1 = n1 + 1; level1[n1] = w1 end
         if w2 ~= 0 then n2 = n2 + 1; level2[n2] = w2 end
@@ -834,15 +847,18 @@ function collator:make_sort_key(codepoints)
     -- break when we reach end of the codepoints array
     if not pos then break end
   end
-  local counts = {n1, n2, n3, n4, n5}
+  local counts = count_table
+  counts[1], counts[2], counts[3], counts[4], counts[5] = n1, n2, n3, n4, n5
   -- (df) Reverse sort for accents?
   -- the secondary weights are reversed in each segment between the U+FFFE
   -- weights (UTS #10, S3.6), the U+FFFE weights stay in place
   if accents_backward and strength ~= 1 then
     local secondary = levels[2]
-    separators[#separators + 1] = counts[2] + 1
+    separator_count = separator_count + 1
+    separators[separator_count] = n2 + 1
     local start = 1
-    for _, separator in ipairs(separators) do
+    for s = 1, separator_count do
+      local separator = separators[s]
       local stop = separator - 1
       while stop > start do
         secondary[start], secondary[stop] = secondary[stop], secondary[start]
@@ -854,11 +870,12 @@ function collator:make_sort_key(codepoints)
   end
   -- every level up to the strength is in the sort key, also when it has no
   -- weights: primary, secondary, the case level, tertiary, quaternary
-  local included = {1}
-  if strength ~= 1 then included[#included + 1] = 2 end
-  if case_level then included[#included + 1] = 3 end
-  if strength == nil or strength >= 3 then included[#included + 1] = element_levels end
-  if quaternary then included[#included + 1] = element_levels + 1 end
+  local included, included_count = included_table, 1
+  included[1] = 1
+  if strength ~= 1 then included_count = included_count + 1; included[included_count] = 2 end
+  if case_level then included_count = included_count + 1; included[included_count] = 3 end
+  if strength == nil or strength >= 3 then included_count = included_count + 1; included[included_count] = element_levels end
+  if quaternary then included_count = included_count + 1; included[included_count] = element_levels + 1 end
   -- the weights of the levels, zero after each level, then the identical
   -- level (UTS #10, S3.10): the NFD code points, shifted by 2 so that they
   -- are above the level separator, U+FFFE with the minimal weight 1
@@ -876,11 +893,14 @@ function collator:make_sort_key(codepoints)
   if pack_pairs then
     -- two weights in each integer, each level on its own, see pack_pairs;
     -- the levels have no weights after their last one: zero
-    for _, i in ipairs(included) do
-      local level = levels[i]
-      for j = 1, counts[i] + 1, 2 do
+    for k = 1, included_count do
+      local i = included[k]
+      local level, last = levels[i], counts[i]
+      -- the values after the last weight are from earlier calls
+      level[last + 1], level[last + 2] = 0, 0
+      for j = 1, last + 1, 2 do
         n = n + 1
-        sort_key[n] = (level[j] or 0) * pair_shift + (level[j + 1] or 0) + sign_bit
+        sort_key[n] = level[j] * pair_shift + level[j + 1] + sign_bit
       end
     end
     if identical then
@@ -893,7 +913,8 @@ function collator:make_sort_key(codepoints)
       end
     end
   else
-    for _, i in ipairs(included) do
+    for k = 1, included_count do
+      local i = included[k]
       local level = levels[i]
       for j = 1, counts[i] do
         n = n + 1
