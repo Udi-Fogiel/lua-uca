@@ -966,10 +966,15 @@ end
 function collator:compare_strings(a,b)
   -- sort using strings
   local cache = self.stringcache
-  local get_sortkey = function(x) return self:make_sort_key(self:string_to_codepoints(x)) end
-  local asortkey = cache[a] or get_sortkey(a)
-  local bsortkey = cache[b] or get_sortkey(b)
-  cache[a], cache[b] = asortkey, bsortkey
+  local asortkey, bsortkey = cache[a], cache[b]
+  if not asortkey then
+    asortkey = self:make_sort_key(self:string_to_codepoints(a))
+    cache[a] = asortkey
+  end
+  if not bsortkey then
+    bsortkey = self:make_sort_key(self:string_to_codepoints(b))
+    cache[b] = bsortkey
+  end
   return self:compare(asortkey, bsortkey)
 end
 
