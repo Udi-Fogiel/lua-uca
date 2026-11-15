@@ -61,6 +61,16 @@ describe("collator test suite",function()
     -- the secondary level of the sort key, between the first two zeroes
     local function secondary(codepoints)
       local key = backward:make_sort_key(codepoints)
+      -- with 64-bit integers the sort key has two weights in each number
+      if math.type and math.type(0) == "integer" then
+        local weights, sign_bit = {}, math.mininteger
+        for _, x in ipairs(key) do
+          local u = x - sign_bit
+          weights[#weights + 1] = u // 0x100000000 % 0x100000000
+          weights[#weights + 1] = u % 0x100000000
+        end
+        key = weights
+      end
       local level, zeroes = {}, 0
       for _, weight in ipairs(key) do
         if weight == 0 then

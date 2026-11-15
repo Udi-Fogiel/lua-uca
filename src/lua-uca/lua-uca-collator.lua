@@ -616,6 +616,14 @@ local tertiary_range = 0x10000
 
 local read_weight, get_implicit_weight = collator.read_weight, collator.get_implicit_weight
 
+-- with 64-bit integers (Lua 5.3 and later), two 32-bit weights are packed in
+-- each number of the sort key: the first in the upper half; adding the sign
+-- bit (with wraparound) makes the signed order of the integers the unsigned
+-- order of the pairs; an odd last weight is paired with zero; without
+-- integers (LuaJIT), each weight is a number of its own
+local pack_pairs = math.type ~= nil and math.type(0) == "integer"
+local pair_shift, sign_bit = 0x100000000, math.mininteger
+
 -- make sort key from codepoints array (it can be created using the utf8.codes() function
 function collator:make_sort_key(codepoints)
   -- the rules change the settings too: applied before they are read
@@ -791,31 +799,68 @@ function collator:make_sort_key(codepoints)
   if case_level then included[#included + 1] = 3 end
   if strength == nil or strength >= 3 then included[#included + 1] = element_levels end
   if quaternary then included[#included + 1] = element_levels + 1 end
-  local n = 0
-  for _, i in ipairs(included) do
-    local level = levels[i]
-    for j = 1, counts[i] do
-      n = n + 1
-      sort_key[n] = level[j]
-    end
-    -- zero separates levels in the sort key
-    n = n + 1
-    sort_key[n] = 0
-  end
-  -- the identical level (UTS #10, S3.10): the NFD code points, shifted by 2
-  -- so that they are above the level separator, U+FFFE with the minimal
-  -- weight 1
+  -- the weights of the levels, zero after each level, then the identical
+  -- level (UTS #10, S3.10): the NFD code points, shifted by 2 so that they
+  -- are above the level separator, U+FFFE with the minimal weight 1
+  local identical
   if settings.identical_level then
-    local nfd = original
+    identical = original
     if normalize_method ~= "NFD" and uni_normalize then
-      nfd = {}
+      identical = {}
       for _, code in utf8.codes(uni_normalize.NFD(utf8.char(table.unpack(original)))) do
-        nfd[#nfd + 1] = code
+        identical[#identical + 1] = code
       end
     end
-    for _, code in ipairs(nfd) do
+  end
+  local n = 0
+  if pack_pairs then
+    -- two weights in each integer, see pack_pairs
+    local high
+    for _, i in ipairs(included) do
+      local level = levels[i]
+      for j = 1, counts[i] + 1 do
+        -- zero after the last weight separates the levels
+        local w = level[j] or 0
+        if high then
+          n = n + 1
+          sort_key[n] = high * pair_shift + w + sign_bit
+          high = nil
+        else
+          high = w
+        end
+      end
+    end
+    if identical then
+      for _, code in ipairs(identical) do
+        local w = code == 0xFFFE and 1 or code + 2
+        if high then
+          n = n + 1
+          sort_key[n] = high * pair_shift + w + sign_bit
+          high = nil
+        else
+          high = w
+        end
+      end
+    end
+    if high then
       n = n + 1
-      sort_key[n] = code == 0xFFFE and 1 or code + 2
+      sort_key[n] = high * pair_shift + sign_bit
+    end
+  else
+    for _, i in ipairs(included) do
+      local level = levels[i]
+      for j = 1, counts[i] do
+        n = n + 1
+        sort_key[n] = level[j]
+      end
+      n = n + 1
+      sort_key[n] = 0
+    end
+    if identical then
+      for _, code in ipairs(identical) do
+        n = n + 1
+        sort_key[n] = code == 0xFFFE and 1 or code + 2
+      end
     end
   end
   return sort_key
@@ -823,14 +868,15 @@ end
 
 function collator:compare(a, b)
   -- sort using sort keys
-  local min = math.min(#a, #b)
-  for i = 1, min do
-    if a[i] ~= b[i] then return a[i] < b[i] end
+  local na, nb = #a, #b
+  for i = 1, na < nb and na or nb do
+    local x, y = a[i], b[i]
+    if x ~= y then return x < y end
   end
   -- this should happen only when the strings are equal
   -- it needs to return false, otherwise the table.sort function reports
   -- "invalid order function for sorting" error
-  return #a < #b
+  return na < nb
 end
 
 local codepoints_cache = {}

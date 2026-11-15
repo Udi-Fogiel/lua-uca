@@ -24,8 +24,10 @@ local function fail(message)
   error("lua-uca: tailoring: " .. message, 0)
 end
 
--- bytes of 32-bit weights, without the integer operators of Lua 5.3
-local function pow256(n) return 256 ^ n end
+-- bytes of 32-bit weights, without the integer operators of Lua 5.3; the
+-- powers are integers, so that the weights stay integers in Lua 5.3
+local powers_of_256 = {[0] = 1, 0x100, 0x10000, 0x1000000, 0x100000000}
+local function pow256(n) return powers_of_256[n] end
 local function byte_of(w, index) return floor(w / pow256(4 - index)) % 256 end
 local function set_byte(w, index, byte)
   return w + (byte - byte_of(w, index)) * pow256(4 - index)

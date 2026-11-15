@@ -42,7 +42,21 @@ local attributes = {
 
 -- the level of the first difference: the levels in the order of the sort
 -- key, then the identical level
+-- the weights of a sort key: with 64-bit integers the sort key has two
+-- weights in each number (see make_sort_key)
+local function weights_of(key)
+  if not (math.type and math.type(0) == "integer") then return key end
+  local weights, sign_bit = {}, math.mininteger
+  for _, x in ipairs(key) do
+    local u = x - sign_bit
+    weights[#weights + 1] = u // 0x100000000 % 0x100000000
+    weights[#weights + 1] = u % 0x100000000
+  end
+  return weights
+end
+
 local function difference(c, a, b)
+  a, b = weights_of(a), weights_of(b)
   local settings = c.settings
   local names = {"1"}
   if settings.strength ~= 1 then names[#names + 1] = "2" end
