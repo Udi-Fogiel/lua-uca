@@ -660,8 +660,10 @@ end
 -- with 64-bit integers (Lua 5.3 and later), two 32-bit weights are packed in
 -- each number of the sort key: the first in the upper half; adding the sign
 -- bit (with wraparound) makes the signed order of the integers the unsigned
--- order of the pairs; an odd last weight is paired with zero; without
--- integers (LuaJIT), each weight is a number of its own
+-- order of the pairs; each level, with the zero after it, is packed on its
+-- own, an odd number of weights is paired with another zero; zero is below
+-- every weight, so this keeps the order of the levels; without integers
+-- (LuaJIT), each weight is a number of its own
 local pack_pairs = math.type ~= nil and math.type(0) == "integer"
 local pair_shift, sign_bit = 0x100000000, math.mininteger
 
@@ -669,8 +671,9 @@ local pair_shift, sign_bit = 0x100000000, math.mininteger
 function collator:make_sort_key(codepoints)
   -- the rules change the settings too: applied before they are read
   if rawget(self, "pending_rules") then self:apply_rules() end
-  -- the non-zero weights of each level, and their numbers
-  local levels, counts = {{}, {}, {}, {}, {}}, {0, 0, 0, 0, 0}
+  -- the non-zero weights of each level, and their numbers (n1 to n5)
+  local levels = {{}, {}, {}, {}, {}}
+  local n1, n2, n3, n4, n5 = 0, 0, 0, 0, 0
   local pos = 1
   local weights, remaining
   local sort_key = {}
@@ -733,19 +736,18 @@ function collator:make_sort_key(codepoints)
     -- pos is nil at the end of the codepoints array
     if pos > count then pos = nil end
     if not transformed then
+      -- three levels in the collation elements
       for e = 1, #weights do
         local element = weights[e]
-        if accents_backward and element[1] == segment_separator then
-          separators[#separators + 1] = counts[2] + 1
-        end
-        for i = 1, #element do
-          local x = element[i]
-          if x ~= 0 then
-            local n = counts[i] + 1
-            counts[i] = n
-            levels[i][n] = x
+        local p, s, t = element[1], element[2], element[3]
+        if p ~= 0 then
+          if accents_backward and p == segment_separator then
+            separators[#separators + 1] = n2 + 1
           end
+          n1 = n1 + 1; level1[n1] = p
         end
+        if s ~= 0 then n2 = n2 + 1; level2[n2] = s end
+        if t ~= 0 then n3 = n3 + 1; level3[n3] = t end
       end
     else
       -- the case, variable and quaternary weights of each collation
@@ -820,19 +822,19 @@ function collator:make_sort_key(codepoints)
           if len == 4 then w4 = q else w5 = q end
         end
         if accents_backward and w1 == segment_separator then
-          separators[#separators + 1] = counts[2] + 1
+          separators[#separators + 1] = n2 + 1
         end
-        local n
-        if w1 ~= 0 then n = counts[1] + 1; counts[1] = n; level1[n] = w1 end
-        if w2 ~= 0 then n = counts[2] + 1; counts[2] = n; level2[n] = w2 end
-        if w3 ~= 0 then n = counts[3] + 1; counts[3] = n; level3[n] = w3 end
-        if len >= 4 and w4 ~= 0 then n = counts[4] + 1; counts[4] = n; level4[n] = w4 end
-        if len == 5 and w5 ~= 0 then n = counts[5] + 1; counts[5] = n; level5[n] = w5 end
+        if w1 ~= 0 then n1 = n1 + 1; level1[n1] = w1 end
+        if w2 ~= 0 then n2 = n2 + 1; level2[n2] = w2 end
+        if w3 ~= 0 then n3 = n3 + 1; level3[n3] = w3 end
+        if len >= 4 and w4 ~= 0 then n4 = n4 + 1; level4[n4] = w4 end
+        if len == 5 and w5 ~= 0 then n5 = n5 + 1; level5[n5] = w5 end
       end
     end
     -- break when we reach end of the codepoints array
     if not pos then break end
   end
+  local counts = {n1, n2, n3, n4, n5}
   -- (df) Reverse sort for accents?
   -- the secondary weights are reversed in each segment between the U+FFFE
   -- weights (UTS #10, S3.6), the U+FFFE weights stay in place
@@ -872,37 +874,23 @@ function collator:make_sort_key(codepoints)
   end
   local n = 0
   if pack_pairs then
-    -- two weights in each integer, see pack_pairs
-    local high
+    -- two weights in each integer, each level on its own, see pack_pairs;
+    -- the levels have no weights after their last one: zero
     for _, i in ipairs(included) do
       local level = levels[i]
-      for j = 1, counts[i] + 1 do
-        -- zero after the last weight separates the levels
-        local w = level[j] or 0
-        if high then
-          n = n + 1
-          sort_key[n] = high * pair_shift + w + sign_bit
-          high = nil
-        else
-          high = w
-        end
+      for j = 1, counts[i] + 1, 2 do
+        n = n + 1
+        sort_key[n] = (level[j] or 0) * pair_shift + (level[j + 1] or 0) + sign_bit
       end
     end
     if identical then
-      for _, code in ipairs(identical) do
+      for j = 1, #identical, 2 do
+        local code, next_code = identical[j], identical[j + 1]
         local w = code == 0xFFFE and 1 or code + 2
-        if high then
-          n = n + 1
-          sort_key[n] = high * pair_shift + w + sign_bit
-          high = nil
-        else
-          high = w
-        end
+        local v = not next_code and 0 or next_code == 0xFFFE and 1 or next_code + 2
+        n = n + 1
+        sort_key[n] = w * pair_shift + v + sign_bit
       end
-    end
-    if high then
-      n = n + 1
-      sort_key[n] = high * pair_shift + sign_bit
     end
   else
     for _, i in ipairs(included) do
