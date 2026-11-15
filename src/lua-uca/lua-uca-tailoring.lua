@@ -107,7 +107,17 @@ local function make_moves(blocks)
     position = position + block.max - block.min + 1
   end
   table.sort(moves, function(x, y) return x[1] < y[1] end)
-  return moves
+  -- adjacent groups with the same move are one range, for the search
+  local merged = {}
+  for _, move in ipairs(moves) do
+    local previous = merged[#merged]
+    if previous and previous[2] + 1 == move[1] and previous[3] == move[3] then
+      previous[2] = move[2]
+    else
+      merged[#merged + 1] = move
+    end
+  end
+  return merged
 end
 
 -- the reordered primary weight
@@ -129,16 +139,30 @@ local function reorder_collator(collator, blocks)
     end
     table.sort(undo, function(x, y) return x[1] < y[1] end)
   end
-  local function update_value(value)
-    for _, element in ipairs(value) do
+  -- the ranges are few (adjacent groups merged), sorted and disjoint: a
+  -- linear search, without a call for each collation element
+  local function update_weights(entry)
+    local value = entry.value
+    if not value then return end
+    for e = 1, #value do
+      local element = value[e]
       local weight = element[1]
-      if undo then weight = move_primary(weight, undo) end
-      if weight ~= 0 then weight = move_primary(weight, moves) end
+      if undo then
+        for m = 1, #undo do
+          local range = undo[m]
+          if weight < range[1] then break end
+          if weight <= range[2] then weight = weight + range[3] break end
+        end
+      end
+      if weight ~= 0 then
+        for m = 1, #moves do
+          local range = moves[m]
+          if weight < range[1] then break end
+          if weight <= range[2] then weight = weight + range[3] break end
+        end
+      end
       element[1] = weight
     end
-  end
-  local function update_weights(entry)
-    if entry.value then update_value(entry.value) end
   end
   for _, current in pairs(collator.codes) do
     collator.walk_entries(current, update_weights)
