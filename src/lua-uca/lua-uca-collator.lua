@@ -186,9 +186,60 @@ function collator.new(codes, settings)
   return self
 end
 
--- a copy of the root for this collator: to call before writing to self.codes
+-- the table of a tailored collator is an overlay over the root: the
+-- entries it changed, copied from the root when they are first written,
+-- the others read from the root through __index
+local overlay_metatables = setmetatable({}, {__mode = "k"})
+local complete_overlays = setmetatable({}, {__mode = "k"})
+local function new_overlay(root_codes)
+  local metatable = overlay_metatables[root_codes]
+  if not metatable then
+    metatable = {__index = root_codes}
+    overlay_metatables[root_codes] = metatable
+  end
+  return setmetatable({}, metatable)
+end
+
+-- the entry of code in the collator's own table, to call before writing to
+-- it or below it (contractions, prefixes); nil when neither the overlay nor
+-- the root has one
+function collator:own_entry(code)
+  if self.codes == self.root_codes then self.codes = new_overlay(self.root_codes) end
+  local codes = self.codes
+  local entry = rawget(codes, code)
+  if entry == nil then
+    local root_entry = self.root_codes[code]
+    if root_entry then
+      entry = copy_table(root_entry)
+      rawset(codes, code, entry)
+    end
+  end
+  return entry
+end
+
+-- every entry of the root in the collator's own table: to call before
+-- changing all of them (reordering, radical-stroke order), or iterating
+-- over them with pairs
 function collator:own_codes()
-  if self.codes == self.root_codes then self.codes = copy_table(self.root_codes) end
+  if self.codes == self.root_codes then self.codes = new_overlay(self.root_codes) end
+  local codes = self.codes
+  if complete_overlays[codes] then return end
+  for code, entry in pairs(self.root_codes) do
+    if rawget(codes, code) == nil then rawset(codes, code, copy_table(entry)) end
+  end
+  complete_overlays[codes] = true
+end
+
+-- the entries of the collator's table: fn(code, entry); those of the root
+-- that the overlay does not replace come first, as in a copy of the root
+local function each_entry(self, fn)
+  local codes, root_codes = self.codes, self.root_codes
+  if codes ~= root_codes and not complete_overlays[codes] then
+    for code, entry in pairs(root_codes) do
+      if rawget(codes, code) == nil then fn(code, entry) end
+    end
+  end
+  for code, entry in pairs(codes) do fn(code, entry) end
 end
 
 -- change options
@@ -198,6 +249,16 @@ function collator:set(settings)
 end
 
 -- make tree that points weights back to codepoints
+-- of the code points with the same weight: the shorter sequence, then the
+-- smaller code points (the order of the table does not matter)
+local function preferred(a, b)
+  if #a ~= #b then return #a < #b end
+  for i = 1, #a do
+    if a[i] ~= b[i] then return a[i] < b[i] end
+  end
+  return false
+end
+
 function collator:weight_to_codepoints(codes)
   local weights = {}
   local codes = codes or self.codes
@@ -211,7 +272,7 @@ function collator:weight_to_codepoints(codes)
       for i, weight in ipairs(values) do
         local new = current[weight] or {}
         -- multiple characters can have the same weight.
-        if i == #values and not new.codepoints then
+        if i == #values and (not new.codepoints or preferred(codepoints, new.codepoints)) then
           new.codepoints = codepoints
         end
         current[weight] = new
@@ -226,8 +287,12 @@ function collator:weight_to_codepoints(codes)
       insert_weight(element, newcodes, weights)
     end
   end
-  for codepoint, element in pairs(codes) do
-    insert_weight(element, {codepoint}, weights)
+  if codes == self.codes then
+    each_entry(self, function(codepoint, element) insert_weight(element, {codepoint}, weights) end)
+  else
+    for codepoint, element in pairs(codes) do
+      insert_weight(element, {codepoint}, weights)
+    end
   end
   return weights
 end
@@ -980,12 +1045,11 @@ end
 
 -- a mapping with a prefix context: key after prefix
 function collator:update_prefix(prefix, key, elements)
-  self:own_codes()
   local first = key[1]
-  local entry = self.codes[first]
+  local entry = self:own_entry(first)
   if not entry then
     entry = {}
-    self.codes[first] = entry
+    rawset(self.codes, first, entry)
   end
   entry.prefixes = entry.prefixes or {}
   local map, node = entry.prefixes
@@ -1013,7 +1077,7 @@ end
 
 -- update collation codes
 function collator:update_codes(key, elements)
-  self:own_codes()
+  self:own_entry(key[1])
   local keys = self.codes
   local function add_to_tree(tbl, current_pos)
     local tbl = tbl or {}
@@ -1205,7 +1269,7 @@ function collator:apply_rules()
   local items = rawget(self, "rule_items") or {}
   for _, item in ipairs(pending) do items[#items + 1] = item end
   rawset(self, "rule_items", items)
-  self.codes = copy_table(self.root_codes)
+  self.codes = new_overlay(self.root_codes)
   rawset(self, "reorder_moves", nil)
   rawset(self, "reorder_inverse", nil)
   if rawget(self, "han_ranges") then self:use_radical_stroke() end

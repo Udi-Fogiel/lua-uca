@@ -930,7 +930,7 @@ function M.build(collator, items, deps)
   -- contractions, no prefixes (CollationDataBuilder::suppressContractions)
   local function suppress_contractions(set)
     for code in pairs(set) do
-      local entry = collator.codes[code]
+      local entry = collator:own_entry(code)
       if entry then
         entry.children = nil
         entry.prefixes = nil
